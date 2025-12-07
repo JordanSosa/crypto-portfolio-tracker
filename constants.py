@@ -56,6 +56,29 @@ API_RETRY_COUNT = 3
 API_TIMEOUT = 10
 API_RATE_LIMIT_BACKOFF_BASE = 2  # Base seconds for exponential backoff
 
+# Rate limiting configuration for historical price fetching
+HISTORICAL_PRICE_FETCH_DELAY = 7  # Seconds between historical price fetches
+RATE_LIMIT_SAFE_THRESHOLD = 2  # Stop fetching if remaining requests < this
+MAX_HISTORICAL_FETCHES_PER_RUN = 3  # Limit number of fetches per run to avoid rate limits
+
 # Currency
 DEFAULT_CURRENCY = "aud"
+
+# DCA Strategy Configuration
+DCA_BASE_MULTIPLIER = 1.0  # Standard DCA amount multiplier
+DCA_INCREASE_MULTIPLIER = 1.5  # Increase DCA when oversold
+DCA_DECREASE_MULTIPLIER = 0.5  # Decrease DCA when overbought
+DCA_PAUSE_THRESHOLD = 80.0  # RSI above which to pause DCA
+
+# Technical Indicator Thresholds
+RSI_OVERSOLD = 30.0
+RSI_OVERBOUGHT = 70.0
+RSI_EXTREME_OVERSOLD = 20.0
+RSI_EXTREME_OVERBOUGHT = 80.0
+
+# Moving Average Periods
+SMA_SHORT_PERIOD = 50
+SMA_LONG_PERIOD = 200
+EMA_SHORT_PERIOD = 12
+EMA_LONG_PERIOD = 26
 

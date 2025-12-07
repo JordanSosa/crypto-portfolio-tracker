@@ -109,6 +109,31 @@ class PortfolioDatabase:
             ON market_analysis(snapshot_id)
         """)
         
+        # Table for historical daily prices (for technical indicators)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS historical_prices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                date TEXT NOT NULL,
+                price REAL NOT NULL,
+                volume_24h REAL,
+                market_cap REAL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(symbol, date)
+            )
+        """)
+        
+        # Create indexes for historical prices
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_historical_prices_symbol_date 
+            ON historical_prices(symbol, date DESC)
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_historical_prices_symbol 
+            ON historical_prices(symbol)
+        """)
+        
         self.conn.commit()
     
     def save_snapshot(
@@ -512,6 +537,91 @@ class PortfolioDatabase:
         
         self.conn.commit()
         return cursor.rowcount
+    
+    def save_historical_prices(
+        self,
+        symbol: str,
+        prices: List[Tuple[str, float, Optional[float], Optional[float]]]
+    ):
+        """
+        Save historical prices for an asset
+        
+        Args:
+            symbol: Asset symbol (e.g., 'BTC')
+            prices: List of tuples (date_str, price, volume_24h, market_cap)
+                   date_str format: 'YYYY-MM-DD'
+        """
+        cursor = self.conn.cursor()
+        
+        for date_str, price, volume_24h, market_cap in prices:
+            cursor.execute("""
+                INSERT OR REPLACE INTO historical_prices 
+                (symbol, date, price, volume_24h, market_cap)
+                VALUES (?, ?, ?, ?, ?)
+            """, (symbol, date_str, price, volume_24h, market_cap))
+        
+        self.conn.commit()
+    
+    def get_historical_prices(
+        self,
+        symbol: str,
+        days: int = 200
+    ) -> List[Tuple[datetime, float]]:
+        """
+        Get historical prices for an asset
+        
+        Args:
+            symbol: Asset symbol
+            days: Number of days of history to retrieve
+            
+        Returns:
+            List of tuples (datetime, price) sorted by date (oldest first)
+        """
+        cursor = self.conn.cursor()
+        cutoff_date = datetime.now() - timedelta(days=days)
+        cutoff_str = cutoff_date.strftime("%Y-%m-%d")
+        
+        cursor.execute("""
+            SELECT date, price 
+            FROM historical_prices
+            WHERE symbol = ? AND date >= ?
+            ORDER BY date ASC
+        """, (symbol, cutoff_str))
+        
+        results = []
+        for row in cursor.fetchall():
+            try:
+                date_obj = datetime.strptime(row['date'], "%Y-%m-%d")
+                results.append((date_obj, row['price']))
+            except ValueError:
+                continue
+        
+        return results
+    
+    def get_latest_price_date(self, symbol: str) -> Optional[datetime]:
+        """
+        Get the date of the most recent price data for an asset
+        
+        Args:
+            symbol: Asset symbol
+            
+        Returns:
+            Datetime of latest price or None if no data exists
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT MAX(date) as max_date
+            FROM historical_prices
+            WHERE symbol = ?
+        """, (symbol,))
+        
+        row = cursor.fetchone()
+        if row and row['max_date']:
+            try:
+                return datetime.strptime(row['max_date'], "%Y-%m-%d")
+            except ValueError:
+                return None
+        return None
     
     def close(self):
         """Close database connection"""

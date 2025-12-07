@@ -310,7 +310,8 @@ class PortfolioRebalancer:
         self,
         portfolio: Dict[str, Asset],
         deposit_amount: float,
-        market_data: Optional[Dict] = None
+        market_data: Optional[Dict] = None,
+        dca_priorities: Optional[Dict[str, int]] = None
     ) -> Dict[str, Dict]:
         """
         Calculate how to allocate a deposit to under-allocated assets
@@ -319,6 +320,8 @@ class PortfolioRebalancer:
             portfolio: Dictionary mapping asset symbols to Asset objects
             deposit_amount: Amount available for deposit
             market_data: Optional market data dictionary with prices
+            dca_priorities: Optional dictionary mapping symbols to DCA priorities (0-10)
+                          If provided, allocation will be weighted by priority
             
         Returns:
             Dictionary mapping asset symbols to allocation details
@@ -341,9 +344,28 @@ class PortfolioRebalancer:
         allocations = {}
         
         if deposit_amount <= total_needed:
-            # Allocate proportionally based on how much each asset needs
+            # Calculate weights if priorities provided
+            weights = {}
+            total_weight = 0.0
+            if dca_priorities:
+                for action in buy_actions:
+                    priority = dca_priorities.get(action.symbol, 5)  # Default priority 5 if not found
+                    # Weight = allocation need × (priority + 1) to ensure positive weights
+                    # Using (priority + 1) so priority 0 still gets some allocation
+                    weight = action.value_diff * (priority + 1)
+                    weights[action.symbol] = weight
+                    total_weight += weight
+            
+            # Allocate to each asset
             for action in buy_actions:
-                proportion = action.value_diff / total_needed
+                if dca_priorities and total_weight > 0:
+                    # Priority-weighted allocation
+                    weight = weights.get(action.symbol, 0)
+                    proportion = weight / total_weight
+                else:
+                    # Proportional allocation based on allocation needs (original logic)
+                    proportion = action.value_diff / total_needed
+                
                 allocated = deposit_amount * proportion
                 
                 # Calculate new values and allocations
@@ -412,7 +434,8 @@ class PortfolioRebalancer:
         self,
         portfolio: Dict[str, Asset],
         deposit_amount: float,
-        market_data: Optional[Dict] = None
+        market_data: Optional[Dict] = None,
+        dca_priorities: Optional[Dict[str, int]] = None
     ):
         """
         Print a formatted report showing how to allocate a deposit
@@ -423,7 +446,7 @@ class PortfolioRebalancer:
             market_data: Optional market data dictionary with prices
         """
         current_total = sum(asset.value for asset in portfolio.values())
-        allocations = self.calculate_deposit_allocation(portfolio, deposit_amount, market_data)
+        allocations = self.calculate_deposit_allocation(portfolio, deposit_amount, market_data, dca_priorities)
         
         if not allocations:
             print("\n" + "=" * 100)
