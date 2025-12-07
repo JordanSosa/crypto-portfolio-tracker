@@ -425,9 +425,183 @@ async function initDashboard() {
     }
 }
 
-// Initialize on page load
-document.addEventListener('DOMContentLoaded', initDashboard);
+// Calculate deposit allocation
+async function calculateDepositAllocation(amount) {
+    try {
+        const response = await fetch(`${API_BASE}/api/portfolio/deposit-allocation?amount=${amount}`);
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to calculate allocation');
+        }
+        return await response.json();
+    } catch (error) {
+        console.error('Error calculating deposit allocation:', error);
+        showError(`Failed to calculate deposit allocation: ${error.message}`);
+        return null;
+    }
+}
 
-// Auto-refresh every 5 minutes
+// Display deposit allocation results
+function displayDepositResults(data) {
+    const resultsContainer = document.getElementById('depositResults');
+    resultsContainer.style.display = 'block';
+    
+    let html = `
+        <div class="deposit-summary">
+            <h3>Deposit Summary</h3>
+            <div class="summary-stats">
+                <div class="summary-stat">
+                    <div class="summary-stat-label">Current Portfolio Value</div>
+                    <div class="summary-stat-value">${formatCurrency(data.current_total)}</div>
+                </div>
+                <div class="summary-stat">
+                    <div class="summary-stat-label">Deposit Amount</div>
+                    <div class="summary-stat-value">${formatCurrency(data.deposit_amount)}</div>
+                </div>
+                <div class="summary-stat">
+                    <div class="summary-stat-label">New Portfolio Value</div>
+                    <div class="summary-stat-value">${formatCurrency(data.new_total)}</div>
+                </div>
+                <div class="summary-stat">
+                    <div class="summary-stat-label">Total Allocated</div>
+                    <div class="summary-stat-value">${formatCurrency(data.total_allocated)}</div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    if (data.allocations && data.allocations.length > 0) {
+        html += `
+            <div class="allocation-plan">
+                <h3>Allocation Plan</h3>
+                <table class="allocation-table">
+                    <thead>
+                        <tr>
+                            <th>Asset</th>
+                            <th>Current %</th>
+                            <th>Target %</th>
+                            <th>Deposit Amount</th>
+                            <th>New %</th>
+                            <th>Buy Amount</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
+        
+        // Sort by deposit allocation (highest first)
+        const sorted = [...data.allocations].sort((a, b) => b.deposit_allocation - a.deposit_allocation);
+        
+        sorted.forEach(allocation => {
+            const buyAmount = allocation.amount_to_buy > 0 
+                ? `${allocation.amount_to_buy.toFixed(8)} ${allocation.symbol}`
+                : 'N/A';
+            
+            html += `
+                <tr>
+                    <td><strong>${allocation.symbol}</strong><br><small>${allocation.name}</small></td>
+                    <td>${allocation.current_allocation.toFixed(2)}%</td>
+                    <td>${allocation.target_allocation.toFixed(2)}%</td>
+                    <td>${formatCurrency(allocation.deposit_allocation)}</td>
+                    <td>${allocation.new_allocation.toFixed(2)}%</td>
+                    <td>${buyAmount}</td>
+                </tr>
+            `;
+        });
+        
+        html += `
+                    </tbody>
+                </table>
+            </div>
+        `;
+    } else {
+        html += '<p class="loading">No under-allocated assets found. Portfolio is already balanced.</p>';
+    }
+    
+    if (data.projected_allocations && data.projected_allocations.length > 0) {
+        html += `
+            <div class="projected-allocations">
+                <h3>Projected Allocations After Deposit</h3>
+                <table class="allocation-table">
+                    <thead>
+                        <tr>
+                            <th>Asset</th>
+                            <th>Current %</th>
+                            <th>After Deposit %</th>
+                            <th>Target %</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
+        
+        // Sort by after allocation (highest first)
+        const sorted = [...data.projected_allocations].sort((a, b) => b.after - a.after);
+        
+        sorted.forEach(asset => {
+            const statusText = asset.status.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+            html += `
+                <tr>
+                    <td><strong>${asset.symbol}</strong><br><small>${asset.name}</small></td>
+                    <td>${asset.current.toFixed(2)}%</td>
+                    <td>${asset.after.toFixed(2)}%</td>
+                    <td>${asset.target.toFixed(2)}%</td>
+                    <td><span class="status-badge ${asset.status}">${statusText}</span></td>
+                </tr>
+            `;
+        });
+        
+        html += `
+                    </tbody>
+                </table>
+            </div>
+        `;
+    }
+    
+    resultsContainer.innerHTML = html;
+    
+    // Scroll to results
+    resultsContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', function() {
+    initDashboard();
+    
+    // Deposit calculator event listener
+    const calculateBtn = document.getElementById('calculateDeposit');
+    const depositInput = document.getElementById('depositAmount');
+    
+    if (calculateBtn && depositInput) {
+        calculateBtn.addEventListener('click', async function() {
+            const amount = parseFloat(depositInput.value);
+            
+            if (!amount || amount <= 0) {
+                showError('Please enter a valid deposit amount greater than 0');
+                return;
+            }
+            
+            calculateBtn.disabled = true;
+            calculateBtn.textContent = 'Calculating...';
+            
+            const result = await calculateDepositAllocation(amount);
+            
+            calculateBtn.disabled = false;
+            calculateBtn.textContent = 'Calculate Allocation';
+            
+            if (result) {
+                displayDepositResults(result);
+            }
+        });
+        
+        // Allow Enter key to trigger calculation
+        depositInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                calculateBtn.click();
+            }
+        });
+    }
+});
+
+// Auto-refresh every 5 minutes (uses cached data to avoid rate limits)
 setInterval(initDashboard, 5 * 60 * 1000);
 

@@ -38,10 +38,12 @@ except ImportError:
 app = Flask(__name__, static_folder='dashboard/static', static_url_path='/static')
 CORS(app)  # Enable CORS for development
 
-# Global cache for portfolio data (refresh on each request for now)
+# Global cache for portfolio data with timestamp
 _portfolio_cache = None
 _analyses_cache = None
 _market_data_cache = None
+_cache_timestamp = None
+CACHE_DURATION_SECONDS = 300  # Cache for 5 minutes to avoid rate limits
 
 
 def asset_to_dict(asset: Asset) -> Dict:
@@ -94,9 +96,16 @@ def analysis_to_dict(analysis: MarketAnalysis) -> Dict:
     return result
 
 
-def load_portfolio_data():
+def load_portfolio_data(force_refresh: bool = False):
     """Load portfolio data and cache it"""
-    global _portfolio_cache, _analyses_cache, _market_data_cache
+    global _portfolio_cache, _analyses_cache, _market_data_cache, _cache_timestamp
+    
+    # Check if we have valid cached data
+    if not force_refresh and _portfolio_cache is not None and _cache_timestamp is not None:
+        cache_age = (datetime.now() - _cache_timestamp).total_seconds()
+        if cache_age < CACHE_DURATION_SECONDS:
+            # Return cached data
+            return _portfolio_cache, _analyses_cache, _market_data_cache
     
     if not EVALUATOR_AVAILABLE:
         return None, None, None
@@ -161,10 +170,11 @@ def load_portfolio_data():
         # Store market data in evaluator for rebalancing
         evaluator.market_data = market_data or evaluator.market_data
         
-        # Cache the results
+        # Cache the results with timestamp
         _portfolio_cache = portfolio
         _analyses_cache = analyses
         _market_data_cache = evaluator.market_data
+        _cache_timestamp = datetime.now()
         
         return portfolio, analyses, evaluator.market_data
         
@@ -317,6 +327,130 @@ def get_asset_history(symbol: str):
         ])
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/deposit-allocation')
+def get_deposit_allocation():
+    """Calculate deposit allocation plan"""
+    deposit_amount = request.args.get('amount', type=float)
+    
+    if not deposit_amount or deposit_amount <= 0:
+        return jsonify({'error': 'Invalid deposit amount'}), 400
+    
+    if not REBALANCER_AVAILABLE:
+        return jsonify({'error': 'Rebalancer not available'}), 500
+    
+    portfolio, analyses, market_data = load_portfolio_data()
+    
+    if portfolio is None:
+        return jsonify({'error': 'Could not load portfolio data'}), 500
+    
+    try:
+        rebalancer = PortfolioRebalancer()
+        
+        # Extract DCA priorities from analyses
+        dca_priorities = {}
+        for analysis in analyses:
+            if analysis.dca_priority > 0:
+                dca_priorities[analysis.symbol] = analysis.dca_priority
+        
+        allocations = rebalancer.calculate_deposit_allocation(
+            portfolio,
+            deposit_amount,
+            market_data=market_data,
+            dca_priorities=dca_priorities if dca_priorities else None
+        )
+        
+        current_total = sum(asset.value for asset in portfolio.values())
+        new_total = current_total + deposit_amount
+        
+        # Convert allocations to list format for easier frontend handling
+        allocations_list = []
+        for symbol, details in allocations.items():
+            allocations_list.append({
+                'symbol': symbol,
+                **details
+            })
+        
+        # Calculate projected allocations for all assets
+        projected_allocations = []
+        for symbol, asset in portfolio.items():
+            if symbol in allocations:
+                new_allocation = allocations[symbol]["new_allocation"]
+            else:
+                new_allocation = (asset.value / new_total) * 100
+            
+            target = rebalancer.target_allocations.get(symbol, 0.0)
+            diff = new_allocation - target
+            
+            if abs(diff) < 2.0:
+                status = "on_target"
+            elif diff > 0:
+                status = "over_target"
+            else:
+                status = "under_target"
+            
+            projected_allocations.append({
+                'symbol': symbol,
+                'name': asset.name,
+                'current': asset.allocation_percent,
+                'after': new_allocation,
+                'target': target,
+                'status': status
+            })
+        
+        # Add assets in target but not in portfolio
+        for symbol, target_pct in rebalancer.target_allocations.items():
+            if symbol not in [a['symbol'] for a in projected_allocations]:
+                if symbol in allocations:
+                    new_allocation = allocations[symbol]["new_allocation"]
+                else:
+                    new_allocation = 0.0
+                
+                diff = new_allocation - target_pct
+                if abs(diff) < 2.0:
+                    status = "on_target"
+                elif diff > 0:
+                    status = "over_target"
+                else:
+                    status = "under_target"
+                
+                projected_allocations.append({
+                    'symbol': symbol,
+                    'name': allocations.get(symbol, {}).get('name', symbol),
+                    'current': 0.0,
+                    'after': new_allocation,
+                    'target': target_pct,
+                    'status': status
+                })
+        
+        total_allocated = sum(a['deposit_allocation'] for a in allocations_list)
+        
+        return jsonify({
+            'deposit_amount': deposit_amount,
+            'current_total': current_total,
+            'new_total': new_total,
+            'allocations': allocations_list,
+            'projected_allocations': projected_allocations,
+            'total_allocated': total_allocated,
+            'remaining': deposit_amount - total_allocated
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/portfolio/refresh')
+def refresh_portfolio_data():
+    """Force refresh of portfolio data (bypasses cache)"""
+    portfolio, analyses, market_data = load_portfolio_data(force_refresh=True)
+    
+    if portfolio is None:
+        return jsonify({'error': 'Could not load portfolio data'}), 500
+    
+    return jsonify({
+        'message': 'Portfolio data refreshed successfully',
+        'timestamp': datetime.now().isoformat()
+    })
 
 
 if __name__ == '__main__':

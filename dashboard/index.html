@@ -82,6 +82,21 @@
                 <!-- Populated by JavaScript -->
             </div>
         </section>
+
+        <!-- Deposit Allocation Calculator Section -->
+        <section class="deposit-calculator-section">
+            <h2>DCA Deposit Allocation Calculator</h2>
+            <div class="deposit-input-container">
+                <label for="depositAmount">Enter deposit amount (AUD):</label>
+                <div class="deposit-input-group">
+                    <input type="number" id="depositAmount" placeholder="0.00" step="0.01" min="0">
+                    <button id="calculateDeposit" class="calculate-btn">Calculate Allocation</button>
+                </div>
+            </div>
+            <div id="depositResults" class="deposit-results" style="display: none;">
+                <!-- Results will be populated by JavaScript -->
+            </div>
+        </section>
     </div>
 
     <script src="/static/js/dashboard.js"></script>
