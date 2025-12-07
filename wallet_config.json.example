@@ -1,0 +1,15 @@
+{
+  "etherscan_api_key": "YOUR_ETHERSCAN_API_KEY_HERE",
+  "btc_address": "YOUR_BITCOIN_ADDRESS_HERE",
+  "eth_address": "YOUR_ETHEREUM_ADDRESS_HERE",
+  "xrp_address": "YOUR_XRP_ADDRESS_HERE",
+  "sol_address": "YOUR_SOLANA_ADDRESS_HERE",
+  "erc20_tokens": [
+    {
+      "symbol": "LINK",
+      "contract": "0x514910771AF9Ca656af840dff83E8264EcF986CA",
+      "decimals": 18
+    }
+  ]
+}
+
