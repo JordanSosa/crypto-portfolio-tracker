@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Portfolio Dashboard</title>
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📊 Cryptocurrency Portfolio Dashboard</h1>
+            <div class="last-updated" id="lastUpdated">Loading...</div>
+        </header>
+
+        <!-- Portfolio Overview Section -->
+        <section class="portfolio-overview">
+            <div class="portfolio-summary">
+                <div class="summary-card">
+                    <h3>Total Portfolio Value</h3>
+                    <div class="value" id="totalValue">$0.00</div>
+                </div>
+                <div class="summary-card">
+                    <h3>24h Return</h3>
+                    <div class="value" id="return24h">--</div>
+                </div>
+                <div class="summary-card">
+                    <h3>7d Return</h3>
+                    <div class="value" id="return7d">--</div>
+                </div>
+                <div class="summary-card">
+                    <h3>30d Return</h3>
+                    <div class="value" id="return30d">--</div>
+                </div>
+            </div>
+
+            <div class="chart-container">
+                <h2>Portfolio Value History</h2>
+                <canvas id="portfolioValueChart"></canvas>
+            </div>
+        </section>
+
+        <!-- Asset Allocation Section -->
+        <section class="allocation-section">
+            <h2>Asset Allocation</h2>
+            <div class="allocation-container">
+                <div class="chart-container">
+                    <canvas id="allocationChart"></canvas>
+                </div>
+                <div class="allocation-table-container">
+                    <table id="allocationTable">
+                        <thead>
+                            <tr>
+                                <th>Asset</th>
+                                <th>Allocation</th>
+                                <th>Value</th>
+                                <th>24h Change</th>
+                                <th>Trend</th>
+                            </tr>
+                        </thead>
+                        <tbody id="allocationTableBody">
+                            <!-- Populated by JavaScript -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- Recommendations Section -->
+        <section class="recommendations-section">
+            <h2>Recommendations</h2>
+            <div id="recommendationsContainer">
+                <!-- Populated by JavaScript -->
+            </div>
+        </section>
+
+        <!-- Rebalancing Section -->
+        <section class="rebalancing-section">
+            <h2>Rebalancing Recommendations</h2>
+            <div id="rebalancingContainer">
+                <!-- Populated by JavaScript -->
+            </div>
+        </section>
+    </div>
+
+    <script src="/static/js/dashboard.js"></script>
+</body>
+</html>
+

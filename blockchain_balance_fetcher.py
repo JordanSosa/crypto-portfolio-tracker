@@ -419,8 +419,36 @@ class BlockchainBalanceFetcher:
         
         print("Fetching balances from blockchain...")
         
-        # Bitcoin - manual input only (to avoid API rate limits)
-        if prompt_for_btc:
+        # Bitcoin - check config first, then try to fetch, then prompt if needed
+        if "btc_balance" in wallet_config and wallet_config["btc_balance"] is not None:
+            # Use balance from config (for non-interactive use like API)
+            try:
+                btc_balance = float(wallet_config["btc_balance"])
+                if btc_balance > 0:
+                    balances["BTC"] = btc_balance
+                    print(f"    BTC: {btc_balance:.8f} (from config)")
+            except (ValueError, TypeError):
+                print("    Invalid btc_balance in config, trying other methods...")
+        
+        # If no balance from config, try to fetch from address/xpub
+        if "BTC" not in balances:
+            btc_balance = None
+            if "btc_address" in wallet_config and wallet_config["btc_address"]:
+                print("  Fetching Bitcoin balance from address...")
+                btc_balance = self.fetch_bitcoin_balance(
+                    address=wallet_config["btc_address"],
+                    xpub=wallet_config.get("btc_xpub")
+                )
+            elif "btc_xpub" in wallet_config and wallet_config["btc_xpub"]:
+                print("  Fetching Bitcoin balance from xpub...")
+                btc_balance = self.fetch_bitcoin_balance(xpub=wallet_config["btc_xpub"])
+            
+            if btc_balance is not None and btc_balance > 0:
+                balances["BTC"] = btc_balance
+                print(f"    BTC: {btc_balance:.8f}")
+        
+        # If still no balance and prompting is enabled, ask user
+        if "BTC" not in balances and prompt_for_btc:
             try:
                 print("  Bitcoin balance:")
                 manual_input = input("    Enter your BTC balance (or press Enter to skip): ").strip()

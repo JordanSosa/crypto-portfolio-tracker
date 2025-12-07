@@ -1,0 +1,366 @@
+/* Portfolio Dashboard Styles */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    padding: 20px;
+    color: #333;
+}
+
+.container {
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+header {
+    background: white;
+    padding: 20px 30px;
+    border-radius: 10px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+header h1 {
+    color: #667eea;
+    font-size: 28px;
+}
+
+.last-updated {
+    color: #666;
+    font-size: 14px;
+}
+
+/* Portfolio Overview */
+.portfolio-overview {
+    background: white;
+    padding: 30px;
+    border-radius: 10px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.portfolio-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 20px;
+    margin-bottom: 30px;
+}
+
+.summary-card {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    padding: 20px;
+    border-radius: 8px;
+    color: white;
+    text-align: center;
+}
+
+.summary-card h3 {
+    font-size: 14px;
+    opacity: 0.9;
+    margin-bottom: 10px;
+    font-weight: 500;
+}
+
+.summary-card .value {
+    font-size: 24px;
+    font-weight: bold;
+}
+
+.summary-card .value.positive {
+    color: #4ade80;
+}
+
+.summary-card .value.negative {
+    color: #f87171;
+}
+
+.chart-container {
+    margin-top: 30px;
+}
+
+.chart-container h2 {
+    margin-bottom: 20px;
+    color: #333;
+    font-size: 20px;
+}
+
+.chart-container canvas {
+    max-height: 400px;
+}
+
+/* Allocation Section */
+.allocation-section {
+    background: white;
+    padding: 30px;
+    border-radius: 10px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.allocation-section h2 {
+    margin-bottom: 20px;
+    color: #333;
+    font-size: 24px;
+}
+
+.allocation-container {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 30px;
+}
+
+.allocation-table-container {
+    overflow-x: auto;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+thead {
+    background: #f3f4f6;
+}
+
+th, td {
+    padding: 12px;
+    text-align: left;
+    border-bottom: 1px solid #e5e7eb;
+}
+
+th {
+    font-weight: 600;
+    color: #374151;
+}
+
+tbody tr:hover {
+    background: #f9fafb;
+}
+
+.trend-bullish {
+    color: #10b981;
+    font-weight: 600;
+}
+
+.trend-bearish {
+    color: #ef4444;
+    font-weight: 600;
+}
+
+.trend-neutral {
+    color: #6b7280;
+    font-weight: 600;
+}
+
+.change-positive {
+    color: #10b981;
+}
+
+.change-negative {
+    color: #ef4444;
+}
+
+/* Recommendations Section */
+.recommendations-section {
+    background: white;
+    padding: 30px;
+    border-radius: 10px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.recommendations-section h2 {
+    margin-bottom: 20px;
+    color: #333;
+    font-size: 24px;
+}
+
+.recommendation-card {
+    padding: 20px;
+    border-radius: 8px;
+    margin-bottom: 15px;
+    border-left: 4px solid;
+}
+
+.recommendation-card.high-priority {
+    background: #fef2f2;
+    border-color: #ef4444;
+}
+
+.recommendation-card.medium-priority {
+    background: #fffbeb;
+    border-color: #f59e0b;
+}
+
+.recommendation-card.low-priority {
+    background: #f0fdf4;
+    border-color: #10b981;
+}
+
+.recommendation-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.recommendation-title {
+    font-weight: 600;
+    font-size: 18px;
+    color: #1f2937;
+}
+
+.recommendation-priority {
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.recommendation-priority.high {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.recommendation-priority.medium {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.recommendation-priority.low {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.recommendation-symbol {
+    font-size: 16px;
+    color: #4b5563;
+    margin-top: 5px;
+}
+
+.recommendation-reason {
+    margin-top: 10px;
+    color: #6b7280;
+    font-size: 14px;
+}
+
+.recommendation-action {
+    margin-top: 8px;
+    color: #374151;
+    font-weight: 500;
+    font-size: 14px;
+}
+
+/* Rebalancing Section */
+.rebalancing-section {
+    background: white;
+    padding: 30px;
+    border-radius: 10px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.rebalancing-section h2 {
+    margin-bottom: 20px;
+    color: #333;
+    font-size: 24px;
+}
+
+.rebalancing-group {
+    margin-bottom: 30px;
+}
+
+.rebalancing-group h3 {
+    margin-bottom: 15px;
+    color: #4b5563;
+    font-size: 18px;
+}
+
+.rebalancing-action {
+    padding: 15px;
+    border-radius: 8px;
+    margin-bottom: 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.rebalancing-action.buy {
+    background: #d1fae5;
+    border-left: 4px solid #10b981;
+}
+
+.rebalancing-action.sell {
+    background: #fee2e2;
+    border-left: 4px solid #ef4444;
+}
+
+.rebalancing-action.hold {
+    background: #f3f4f6;
+    border-left: 4px solid #6b7280;
+}
+
+.action-details {
+    flex: 1;
+}
+
+.action-symbol {
+    font-weight: 600;
+    font-size: 16px;
+    color: #1f2937;
+}
+
+.action-info {
+    margin-top: 5px;
+    font-size: 14px;
+    color: #6b7280;
+}
+
+.action-amount {
+    text-align: right;
+    font-weight: 600;
+    color: #1f2937;
+}
+
+/* Loading State */
+.loading {
+    text-align: center;
+    padding: 40px;
+    color: #6b7280;
+}
+
+.error {
+    background: #fee2e2;
+    color: #991b1b;
+    padding: 15px;
+    border-radius: 8px;
+    margin: 20px 0;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .allocation-container {
+        grid-template-columns: 1fr;
+    }
+    
+    .portfolio-summary {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    
+    header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+    }
+}
+

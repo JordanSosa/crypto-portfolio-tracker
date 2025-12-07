@@ -1,6 +1,8 @@
 {
   "etherscan_api_key": "YOUR_ETHERSCAN_API_KEY_HERE",
+  "btc_balance": 0.00622109,
   "btc_address": "YOUR_BITCOIN_ADDRESS_HERE",
+  "btc_xpub": "YOUR_BITCOIN_XPUB_KEY_HERE",
   "eth_address": "YOUR_ETHEREUM_ADDRESS_HERE",
   "xrp_address": "YOUR_XRP_ADDRESS_HERE",
   "sol_address": "YOUR_SOLANA_ADDRESS_HERE",

@@ -1276,12 +1276,14 @@ def load_portfolio_from_balances(balances: Dict[str, float], market_data: Dict) 
     return portfolio
 
 
-def load_portfolio_from_wallet(wallet_config_path: str = "wallet_config.json") -> Tuple[Optional[Dict[str, Asset]], Optional[Dict]]:
+def load_portfolio_from_wallet(wallet_config_path: str = "wallet_config.json", prompt_for_btc: bool = True) -> Tuple[Optional[Dict[str, Asset]], Optional[Dict]]:
     """
     Load portfolio automatically from wallet addresses
     
     Args:
         wallet_config_path: Path to wallet configuration file
+        prompt_for_btc: Whether to prompt for Bitcoin balance if not in config (default: True)
+                       Set to False for non-interactive use (e.g., API servers)
         
     Returns:
         Tuple of (Dictionary of Asset objects, market_data Dict) or (None, None) if loading fails
@@ -1311,8 +1313,8 @@ def load_portfolio_from_wallet(wallet_config_path: str = "wallet_config.json") -
     
     fetcher = BlockchainBalanceFetcher(etherscan_api_key=etherscan_key)
     
-    # Fetch balances
-    balances = fetcher.fetch_all_balances(wallet_config)
+    # Fetch balances - pass prompt_for_btc parameter
+    balances = fetcher.fetch_all_balances(wallet_config, prompt_for_btc=prompt_for_btc)
     
     if not balances:
         print("No balances found. Please check your wallet addresses.")
@@ -1517,8 +1519,34 @@ if __name__ == "__main__":
         action="store_true",
         help="Skip rebalancing recommendations"
     )
+    parser.add_argument(
+        "--dashboard",
+        action="store_true",
+        help="Start the web dashboard server"
+    )
     
     args = parser.parse_args()
+    
+    # If --dashboard is specified, start the dashboard server
+    if args.dashboard:
+        try:
+            from dashboard_api import app
+            print("=" * 80)
+            print("Starting Portfolio Dashboard...")
+            print("=" * 80)
+            print("Dashboard will be available at: http://localhost:5000")
+            print("Press Ctrl+C to stop the server")
+            print("=" * 80)
+            app.run(debug=False, host='127.0.0.1', port=5000)
+        except ImportError:
+            print("Error: Could not import dashboard_api module.")
+            print("Please ensure dashboard_api.py exists and Flask is installed.")
+            print("Install Flask with: pip install flask flask-cors")
+            sys.exit(1)
+        except Exception as e:
+            print(f"Error starting dashboard: {e}")
+            sys.exit(1)
+        sys.exit(0)
     
     # If --history is specified, show history and exit
     if args.history:

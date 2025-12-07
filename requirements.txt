@@ -1,3 +1,5 @@
 requests>=2.31.0
 bip32utils>=0.3.post4
 base58>=2.1.1
+flask>=3.0.0
+flask-cors>=4.0.0
