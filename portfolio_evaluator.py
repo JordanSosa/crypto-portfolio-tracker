@@ -26,6 +26,12 @@ try:
 except ImportError:
     DATABASE_AVAILABLE = False
 
+try:
+    from portfolio_rebalancer import PortfolioRebalancer
+    REBALANCER_AVAILABLE = True
+except ImportError:
+    REBALANCER_AVAILABLE = False
+
 
 class Recommendation(Enum):
     BUY = "BUY"
@@ -346,6 +352,9 @@ class PortfolioEvaluator:
         else:
             print(f"Using pre-fetched market data for {len(symbols)} assets...")
         
+        # Store market_data for use in rebalancing calculations
+        self.market_data = market_data
+        
         print(f"Successfully fetched data for {len(market_data)} assets\n")
         
         analyses = []
@@ -355,7 +364,7 @@ class PortfolioEvaluator:
         
         return analyses
     
-    def print_report(self, analyses: List[MarketAnalysis], show_history: bool = False):
+    def print_report(self, analyses: List[MarketAnalysis], show_history: bool = False, show_rebalancing: bool = True):
         """Print formatted evaluation report"""
         print("=" * 80)
         print("PORTFOLIO EVALUATION REPORT")
@@ -393,6 +402,57 @@ class PortfolioEvaluator:
                 db.close()
             except Exception as e:
                 print(f"\nNote: Could not load historical data: {e}")
+        
+        # Show rebalancing recommendations if available
+        if show_rebalancing and REBALANCER_AVAILABLE:
+            try:
+                rebalancer = PortfolioRebalancer()
+                # Get market data for assets not in portfolio (if available)
+                market_data = getattr(self, 'market_data', None)
+                rebalancing_actions = rebalancer.calculate_rebalancing(
+                    self.portfolio, 
+                    market_data=market_data
+                )
+                if rebalancing_actions:
+                    print("\n")
+                    rebalancer.print_rebalancing_report(rebalancing_actions, total_value, show_hold=False)
+                    
+                    # Check if there are sell actions - if so, offer deposit-based alternative
+                    sell_actions = [a for a in rebalancing_actions if a.action == "SELL"]
+                    buy_actions = [a for a in rebalancing_actions if a.action == "BUY"]
+                    
+                    if sell_actions or buy_actions:
+                        print("\n" + "=" * 100)
+                        print("DEPOSIT-BASED REBALANCING OPTION")
+                        print("=" * 100)
+                        print("Instead of selling assets, you can rebalance using new deposits.")
+                        print("This avoids capital gains taxes and keeps your portfolio growing.")
+                        print()
+                        
+                        # Calculate minimum deposit needed to fully rebalance
+                        total_buy_needed = sum(a.value_diff for a in buy_actions if a.value_diff > 0)
+                        if total_buy_needed > 0:
+                            print(f"Minimum deposit to fully rebalance: AU${total_buy_needed:,.2f}")
+                            print("(You can deposit any amount - smaller deposits will partially rebalance)")
+                            print()
+                        
+                        try:
+                            deposit_input = input("Enter deposit amount (AUD) to see allocation plan (or press Enter to skip): ").strip()
+                            if deposit_input:
+                                deposit_amount = float(deposit_input)
+                                if deposit_amount > 0:
+                                    rebalancer.print_deposit_allocation_report(
+                                        self.portfolio,
+                                        deposit_amount,
+                                        market_data=market_data
+                                    )
+                                else:
+                                    print("Deposit amount must be greater than 0.")
+                        except (ValueError, EOFError, KeyboardInterrupt):
+                            # Handle invalid input or non-interactive mode
+                            pass
+            except Exception as e:
+                print(f"\nNote: Could not generate rebalancing report: {e}")
         
         print()
         
@@ -649,12 +709,13 @@ def print_portfolio_history(days: int = 30):
         print(f"Error loading portfolio history: {e}")
 
 
-def main(save_snapshot: bool = True):
+def main(save_snapshot: bool = True, show_rebalancing: bool = True):
     """
     Main function - initialize portfolio and run evaluation
     
     Args:
         save_snapshot: Whether to save portfolio snapshot to database (default: True)
+        show_rebalancing: Whether to show rebalancing recommendations (default: True)
     """
     
     # Try to load portfolio from wallet addresses first
@@ -715,12 +776,23 @@ def main(save_snapshot: bool = True):
     evaluator = PortfolioEvaluator(portfolio)
     analyses = evaluator.evaluate_portfolio(market_data=market_data)
     
+    # Ensure we have market data for all target allocation assets (for rebalancing)
+    if REBALANCER_AVAILABLE and analyses:
+        rebalancer = PortfolioRebalancer()
+        target_symbols = list(rebalancer.target_allocations.keys())
+        missing_symbols = [s for s in target_symbols if s not in evaluator.market_data]
+        if missing_symbols:
+            # Fetch prices for assets in target allocation but not in portfolio
+            print(f"Fetching prices for target allocation assets: {', '.join(missing_symbols)}")
+            additional_market_data = evaluator.fetch_market_data(missing_symbols)
+            evaluator.market_data.update(additional_market_data)
+    
     if analyses:
         # Save snapshot to database (unless disabled)
         save_portfolio_snapshot(portfolio, analyses, enabled=save_snapshot)
         
-        # Print report with historical data
-        evaluator.print_report(analyses, show_history=True)
+        # Print report with historical data and rebalancing recommendations
+        evaluator.print_report(analyses, show_history=True, show_rebalancing=show_rebalancing)
         
         # Show brief history summary
         if DATABASE_AVAILABLE:
@@ -746,6 +818,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Skip saving portfolio snapshot to database"
     )
+    parser.add_argument(
+        "--no-rebalancing",
+        action="store_true",
+        help="Skip rebalancing recommendations"
+    )
     
     args = parser.parse_args()
     
@@ -755,4 +832,4 @@ if __name__ == "__main__":
         sys.exit(0)
     
     # Otherwise, run normal evaluation
-    main(save_snapshot=not args.no_save)
+    main(save_snapshot=not args.no_save, show_rebalancing=not args.no_rebalancing)
