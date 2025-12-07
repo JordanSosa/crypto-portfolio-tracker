@@ -138,8 +138,10 @@ The tool calculates and displays:
 ```
 .
 ├── portfolio_evaluator.py      # Main portfolio analysis and evaluation
+├── portfolio_rebalancer.py     # Target allocation and rebalancing calculator
 ├── blockchain_balance_fetcher.py  # Blockchain balance fetching
 ├── portfolio_database.py       # Database operations for historical tracking
+├── constants.py                # Shared constants and configuration
 ├── wallet_config.json          # Wallet addresses and API keys (create from example)
 ├── wallet_config.json.example  # Example configuration file
 ├── portfolio_history.db        # SQLite database (created automatically)

@@ -32,6 +32,47 @@ try:
 except ImportError:
     REBALANCER_AVAILABLE = False
 
+try:
+    from constants import (
+        COINGECKO_BASE_URL,
+        COIN_IDS,
+        COIN_NAMES,
+        API_RETRY_COUNT,
+        API_TIMEOUT,
+        API_RATE_LIMIT_BACKOFF_BASE,
+        DEFAULT_CURRENCY,
+        OVER_ALLOCATION_THRESHOLD,
+        STRONG_MOMENTUM_THRESHOLD,
+        BEARISH_MOMENTUM_THRESHOLD,
+        MODERATE_BEARISH_THRESHOLD,
+        HIGH_VOLATILITY_THRESHOLD,
+        STRONG_PRICE_DROP_THRESHOLD
+    )
+except ImportError:
+    # Fallback if constants module not available
+    COINGECKO_BASE_URL = "https://api.coingecko.com/api/v3"
+    COIN_IDS = {
+        "BTC": "bitcoin", "ETH": "ethereum", "XRP": "ripple",
+        "SOL": "solana", "LINK": "chainlink", "BCH": "bitcoin-cash",
+        "UNI": "uniswap", "LEO": "leo-token", "WBT": "whitebit",
+        "WLFI": "world-liberty-financial"
+    }
+    COIN_NAMES = {
+        "BTC": "Bitcoin", "ETH": "Ethereum", "XRP": "Ripple",
+        "SOL": "Solana", "LINK": "Chainlink", "UNI": "Uniswap",
+        "BCH": "Bitcoin Cash", "LEO": "LEO Token", "WBT": "WhiteBIT Coin"
+    }
+    API_RETRY_COUNT = 3
+    API_TIMEOUT = 10
+    API_RATE_LIMIT_BACKOFF_BASE = 2
+    DEFAULT_CURRENCY = "aud"
+    OVER_ALLOCATION_THRESHOLD = 45.0
+    STRONG_MOMENTUM_THRESHOLD = 2.0
+    BEARISH_MOMENTUM_THRESHOLD = -2.0
+    MODERATE_BEARISH_THRESHOLD = -1.5
+    HIGH_VOLATILITY_THRESHOLD = 20.0
+    STRONG_PRICE_DROP_THRESHOLD = -5.0
+
 
 class Recommendation(Enum):
     BUY = "BUY"
@@ -67,23 +108,6 @@ class MarketAnalysis:
 class PortfolioEvaluator:
     """Evaluates cryptocurrency portfolio and provides trading recommendations"""
     
-    # CoinGecko API endpoint (free, no API key required)
-    BASE_URL = "https://api.coingecko.com/api/v3"
-    
-    # Coin ID mapping (CoinGecko uses different IDs than symbols)
-    COIN_IDS = {
-        "BTC": "bitcoin",
-        "ETH": "ethereum",
-        "XRP": "ripple",
-        "SOL": "solana",
-        "LINK": "chainlink",
-        "BCH": "bitcoin-cash",
-        "UNI": "uniswap",
-        "LEO": "leo-token",
-        "WBT": "whitebit",
-        "WLFI": "world-liberty-financial"
-    }
-    
     def __init__(self, portfolio: Dict[str, Asset]):
         """
         Initialize evaluator with portfolio data
@@ -94,7 +118,7 @@ class PortfolioEvaluator:
         self.portfolio = portfolio
         self.market_data = {}
         
-    def fetch_market_data(self, symbols: List[str], retry_count: int = 3) -> Dict:
+    def fetch_market_data(self, symbols: List[str], retry_count: int = API_RETRY_COUNT) -> Dict:
         """
         Fetch current market data for given symbols with retry logic for rate limits
         
@@ -102,16 +126,16 @@ class PortfolioEvaluator:
             symbols: List of asset symbols to fetch
             retry_count: Number of retry attempts for rate limit errors
         """
-        coin_ids = [self.COIN_IDS.get(symbol.upper()) for symbol in symbols 
-                   if symbol.upper() in self.COIN_IDS]
+        coin_ids = [COIN_IDS.get(symbol.upper()) for symbol in symbols 
+                   if symbol.upper() in COIN_IDS]
         
         if not coin_ids:
             return {}
         
         # Fetch price data with 24h, 7d, 30d changes
-        url = f"{self.BASE_URL}/coins/markets"
+        url = f"{COINGECKO_BASE_URL}/coins/markets"
         params = {
-            "vs_currency": "aud",
+            "vs_currency": DEFAULT_CURRENCY,
             "ids": ",".join(coin_ids),
             "order": "market_cap_desc",
             "per_page": 100,
@@ -122,12 +146,12 @@ class PortfolioEvaluator:
         
         for attempt in range(retry_count):
             try:
-                response = requests.get(url, params=params, timeout=10)
+                response = requests.get(url, params=params, timeout=API_TIMEOUT)
                 
                 # Handle rate limiting (429 Too Many Requests)
                 if response.status_code == 429:
                     if attempt < retry_count - 1:
-                        wait_time = (attempt + 1) * 2  # Exponential backoff: 2s, 4s, 6s
+                        wait_time = (attempt + 1) * API_RATE_LIMIT_BACKOFF_BASE
                         print(f"    Rate limit hit. Waiting {wait_time} seconds before retry...")
                         time.sleep(wait_time)
                         continue
@@ -141,7 +165,7 @@ class PortfolioEvaluator:
                 
             except requests.exceptions.RequestException as e:
                 if attempt < retry_count - 1:
-                    wait_time = (attempt + 1) * 2
+                    wait_time = (attempt + 1) * API_RATE_LIMIT_BACKOFF_BASE
                     print(f"    Request error: {e}. Retrying in {wait_time} seconds...")
                     time.sleep(wait_time)
                 else:
@@ -154,7 +178,7 @@ class PortfolioEvaluator:
         # Organize data by symbol
         market_data = {}
         for coin in data:
-            symbol = next((s for s, cid in self.COIN_IDS.items() 
+            symbol = next((s for s, cid in COIN_IDS.items() 
                           if cid == coin["id"]), None)
             if symbol:
                 market_data[symbol] = {
@@ -254,11 +278,11 @@ class PortfolioEvaluator:
         reasons = []
         action_parts = []
         
-        # Factor 1: Over-allocation check (if > 45%, consider rebalancing)
-        if asset.allocation_percent > 45:
+        # Factor 1: Over-allocation check
+        if asset.allocation_percent > OVER_ALLOCATION_THRESHOLD:
             reasons.append(f"Over-allocated at {asset.allocation_percent:.2f}%")
             # Use risk-adjusted momentum for more accurate signal detection
-            if trend == "bearish" or risk_adjusted_momentum < -1.5:
+            if trend == "bearish" or risk_adjusted_momentum < MODERATE_BEARISH_THRESHOLD:
                 return (
                     Recommendation.SELL,
                     f"Over-allocated ({asset.allocation_percent:.2f}%) and showing bearish signals",
@@ -266,8 +290,8 @@ class PortfolioEvaluator:
                 )
         
         # Factor 2: Strong bearish momentum (using risk-adjusted)
-        # -2.0 means 2 standard deviations below mean - very significant for any asset
-        if risk_adjusted_momentum < -2.0 and change_24h < -5:
+        # BEARISH_MOMENTUM_THRESHOLD means 2 standard deviations below mean - very significant
+        if risk_adjusted_momentum < BEARISH_MOMENTUM_THRESHOLD and change_24h < STRONG_PRICE_DROP_THRESHOLD:
             reasons.append("Strong bearish momentum detected")
             if asset.allocation_percent > 20:
                 return (
@@ -277,8 +301,8 @@ class PortfolioEvaluator:
                 )
         
         # Factor 3: Strong bullish momentum with low allocation (using risk-adjusted)
-        # +2.0 means 2 standard deviations above mean - very significant for any asset
-        if risk_adjusted_momentum > 2.0 and asset.allocation_percent < 10:
+        # STRONG_MOMENTUM_THRESHOLD means 2 standard deviations above mean - very significant
+        if risk_adjusted_momentum > STRONG_MOMENTUM_THRESHOLD and asset.allocation_percent < 10:
             reasons.append("Strong bullish momentum with low allocation")
             return (
                 Recommendation.BUY,
@@ -287,7 +311,7 @@ class PortfolioEvaluator:
             )
         
         # Factor 4: High volatility with over-allocation
-        if volatility > 20 and asset.allocation_percent > 30:
+        if volatility > HIGH_VOLATILITY_THRESHOLD and asset.allocation_percent > 30:
             reasons.append(f"High volatility ({volatility:.1f}%) with large position")
             if trend == "bearish":
                 return (
@@ -363,6 +387,32 @@ class PortfolioEvaluator:
             analyses.append(analysis)
         
         return analyses
+    
+    def _print_recommendation_section(
+        self, 
+        action_type: str, 
+        section_title: str, 
+        analyses: List[MarketAnalysis],
+        show_action: bool = True
+    ):
+        """Helper method to print a section of recommendations"""
+        print(f"[{action_type}] {section_title}")
+        print("-" * 80)
+        for analysis in analyses:
+            asset = self.portfolio[analysis.symbol]
+            print(f"\n{asset.name} ({analysis.symbol})")
+            print(f"  Current Allocation: {asset.allocation_percent:.2f}%")
+            print(f"  Current Value: AU${asset.value:,.2f}")
+            print(f"  24h Change: {analysis.price_change_24h:+.2f}%")
+            print(f"  7d Change: {analysis.price_change_7d:+.2f}%")
+            print(f"  30d Change: {analysis.price_change_30d:+.2f}%")
+            print(f"  Momentum: {analysis.momentum:+.2f}%")
+            print(f"  Risk-Adjusted Momentum: {analysis.risk_adjusted_momentum:+.2f} std dev")
+            print(f"  Trend: {analysis.trend.upper()}")
+            print(f"  Reason: {analysis.reason}")
+            if show_action:
+                print(f"  Action: {analysis.suggested_action}")
+        print()
     
     def print_report(self, analyses: List[MarketAnalysis], show_history: bool = False, show_rebalancing: bool = True):
         """Print formatted evaluation report"""
@@ -463,57 +513,13 @@ class PortfolioEvaluator:
         
         # Print recommendations
         if sell_assets:
-            print("[SELL] SELL RECOMMENDATIONS")
-            print("-" * 80)
-            for analysis in sell_assets:
-                asset = self.portfolio[analysis.symbol]
-                print(f"\n{asset.name} ({analysis.symbol})")
-                print(f"  Current Allocation: {asset.allocation_percent:.2f}%")
-                print(f"  Current Value: AU${asset.value:,.2f}")
-                print(f"  24h Change: {analysis.price_change_24h:+.2f}%")
-                print(f"  7d Change: {analysis.price_change_7d:+.2f}%")
-                print(f"  30d Change: {analysis.price_change_30d:+.2f}%")
-                print(f"  Momentum: {analysis.momentum:+.2f}%")
-                print(f"  Risk-Adjusted Momentum: {analysis.risk_adjusted_momentum:+.2f} std dev")
-                print(f"  Trend: {analysis.trend.upper()}")
-                print(f"  Reason: {analysis.reason}")
-                print(f"  Action: {analysis.suggested_action}")
-            print()
+            self._print_recommendation_section("SELL", "SELL RECOMMENDATIONS", sell_assets, show_action=True)
         
         if buy_assets:
-            print("[BUY] BUY RECOMMENDATIONS")
-            print("-" * 80)
-            for analysis in buy_assets:
-                asset = self.portfolio[analysis.symbol]
-                print(f"\n{asset.name} ({analysis.symbol})")
-                print(f"  Current Allocation: {asset.allocation_percent:.2f}%")
-                print(f"  Current Value: AU${asset.value:,.2f}")
-                print(f"  24h Change: {analysis.price_change_24h:+.2f}%")
-                print(f"  7d Change: {analysis.price_change_7d:+.2f}%")
-                print(f"  30d Change: {analysis.price_change_30d:+.2f}%")
-                print(f"  Momentum: {analysis.momentum:+.2f}%")
-                print(f"  Risk-Adjusted Momentum: {analysis.risk_adjusted_momentum:+.2f} std dev")
-                print(f"  Trend: {analysis.trend.upper()}")
-                print(f"  Reason: {analysis.reason}")
-                print(f"  Action: {analysis.suggested_action}")
-            print()
+            self._print_recommendation_section("BUY", "BUY RECOMMENDATIONS", buy_assets, show_action=True)
         
         if hold_assets:
-            print("[HOLD] HOLD RECOMMENDATIONS")
-            print("-" * 80)
-            for analysis in hold_assets:
-                asset = self.portfolio[analysis.symbol]
-                print(f"\n{asset.name} ({analysis.symbol})")
-                print(f"  Current Allocation: {asset.allocation_percent:.2f}%")
-                print(f"  Current Value: AU${asset.value:,.2f}")
-                print(f"  24h Change: {analysis.price_change_24h:+.2f}%")
-                print(f"  7d Change: {analysis.price_change_7d:+.2f}%")
-                print(f"  30d Change: {analysis.price_change_30d:+.2f}%")
-                print(f"  Momentum: {analysis.momentum:+.2f}%")
-                print(f"  Risk-Adjusted Momentum: {analysis.risk_adjusted_momentum:+.2f} std dev")
-                print(f"  Trend: {analysis.trend.upper()}")
-                print(f"  Reason: {analysis.reason}")
-            print()
+            self._print_recommendation_section("HOLD", "HOLD RECOMMENDATIONS", hold_assets, show_action=False)
         
         # Summary
         print("=" * 80)
@@ -552,18 +558,6 @@ def load_portfolio_from_balances(balances: Dict[str, float], market_data: Dict) 
             total_value += value
     
     # Second pass: create Asset objects with allocations
-    coin_names = {
-        "BTC": "Bitcoin",
-        "ETH": "Ethereum",
-        "XRP": "Ripple",
-        "SOL": "Solana",
-        "LINK": "Chainlink",
-        "UNI": "Uniswap",
-        "BCH": "Bitcoin Cash",
-        "LEO": "LEO Token",
-        "WBT": "WhiteBIT Coin"
-    }
-    
     for symbol, amount in balances.items():
         if symbol in market_data:
             price = market_data[symbol]["current_price"]
@@ -572,7 +566,7 @@ def load_portfolio_from_balances(balances: Dict[str, float], market_data: Dict) 
             
             portfolio[symbol] = Asset(
                 symbol=symbol,
-                name=coin_names.get(symbol, symbol),
+                name=COIN_NAMES.get(symbol, symbol),
                 amount=amount,
                 current_price=price,
                 allocation_percent=allocation,

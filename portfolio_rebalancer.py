@@ -7,6 +7,26 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from portfolio_evaluator import Asset
 
+try:
+    from constants import DEFAULT_TARGET_ALLOCATIONS, COIN_NAMES, REBALANCE_THRESHOLD
+except ImportError:
+    # Fallback if constants module not available
+    DEFAULT_TARGET_ALLOCATIONS = {
+        "BTC": 50.0,
+        "ETH": 20.0,
+        "XRP": 15.0,
+        "SOL": 10.0,
+        "LINK": 5.0
+    }
+    COIN_NAMES = {
+        "BTC": "Bitcoin",
+        "ETH": "Ethereum",
+        "XRP": "Ripple",
+        "SOL": "Solana",
+        "LINK": "Chainlink"
+    }
+    REBALANCE_THRESHOLD = 2.0
+
 
 @dataclass
 class RebalancingAction:
@@ -29,15 +49,6 @@ class RebalancingAction:
 class PortfolioRebalancer:
     """Calculates rebalancing actions to reach target allocations"""
     
-    # Default target allocations (can be overridden)
-    DEFAULT_TARGET_ALLOCATIONS = {
-        "BTC": 50.0,
-        "ETH": 20.0,
-        "XRP": 15.0,
-        "SOL": 10.0,
-        "LINK": 5.0
-    }
-    
     def __init__(self, target_allocations: Optional[Dict[str, float]] = None):
         """
         Initialize rebalancer with target allocations
@@ -48,7 +59,7 @@ class PortfolioRebalancer:
                               Values should sum to 100.
         """
         if target_allocations is None:
-            self.target_allocations = self.DEFAULT_TARGET_ALLOCATIONS.copy()
+            self.target_allocations = DEFAULT_TARGET_ALLOCATIONS.copy()
         else:
             self.target_allocations = target_allocations.copy()
         
@@ -63,7 +74,7 @@ class PortfolioRebalancer:
     def calculate_rebalancing(
         self, 
         portfolio: Dict[str, Asset],
-        rebalance_threshold: float = 2.0,
+        rebalance_threshold: float = REBALANCE_THRESHOLD,
         market_data: Optional[Dict] = None
     ) -> List[RebalancingAction]:
         """
@@ -139,14 +150,7 @@ class PortfolioRebalancer:
                 if market_data and symbol in market_data:
                     price = market_data[symbol].get("current_price", 0.0)
                     # Try to get name from coin names mapping
-                    coin_names = {
-                        "BTC": "Bitcoin",
-                        "ETH": "Ethereum",
-                        "XRP": "Ripple",
-                        "SOL": "Solana",
-                        "LINK": "Chainlink"
-                    }
-                    name = coin_names.get(symbol, symbol)
+                    name = COIN_NAMES.get(symbol, symbol)
                 
                 # Calculate target amount if we have price
                 if price > 0:
