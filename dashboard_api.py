@@ -35,6 +35,12 @@ try:
 except ImportError:
     REBALANCER_AVAILABLE = False
 
+try:
+    from transaction_tracker import TransactionTracker, TransactionType, AccountingMethod
+    TRANSACTION_TRACKER_AVAILABLE = True
+except ImportError:
+    TRANSACTION_TRACKER_AVAILABLE = False
+
 app = Flask(__name__, static_folder='dashboard/static', static_url_path='/static')
 CORS(app)  # Enable CORS for development
 
@@ -249,7 +255,7 @@ def get_performance_metrics():
         sharpe = db.calculate_sharpe_ratio(days=365)
         sortino = db.calculate_sortino_ratio(days=365)
         drawdown = db.calculate_max_drawdown(days=365)
-        benchmark = db.calculate_benchmark_comparison(benchmark_symbol="BTC", days=365)
+        # Note: benchmark comparison removed per user request
         
         db.close()
         
@@ -270,8 +276,8 @@ def get_performance_metrics():
             'snapshot_count': snapshot_count,
             'sharpe_ratio': sharpe,
             'sortino_ratio': sortino,
-            'max_drawdown': drawdown_formatted,
-            'benchmark_comparison': benchmark
+            'max_drawdown': drawdown_formatted
+            # Note: benchmark_comparison removed per user request
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -474,6 +480,121 @@ def refresh_portfolio_data():
         'message': 'Portfolio data refreshed successfully',
         'timestamp': datetime.now().isoformat()
     })
+
+
+@app.route('/api/transactions/pnl')
+def get_transaction_pnl():
+    """Get P&L summary from transaction tracker"""
+    if not TRANSACTION_TRACKER_AVAILABLE:
+        return jsonify({'error': 'Transaction tracker not available'}), 500
+    
+    try:
+        db = PortfolioDatabase()
+        tracker = db.transaction_tracker
+        
+        # Get portfolio P&L summary with automatic price fetching
+        summary = tracker.get_portfolio_pnl_summary()
+        
+        # Format unrealized P&L for JSON
+        unrealized_formatted = {}
+        for symbol, pnl in summary['unrealized_pnl'].items():
+            unrealized_formatted[symbol] = {
+                'symbol': pnl.symbol,
+                'current_amount': pnl.current_amount,
+                'average_cost_basis': pnl.average_cost_basis,
+                'current_price': pnl.current_price,
+                'total_cost_basis': pnl.total_cost_basis,
+                'current_value': pnl.current_value,
+                'unrealized_gain_loss': pnl.unrealized_gain_loss,
+                'unrealized_gain_loss_pct': pnl.unrealized_gain_loss_pct
+            }
+        
+        prices_failed = summary.get('prices_failed', False)
+        error_message = None
+        if prices_failed:
+            error_message = "Unable to fetch current prices from CoinGecko API. This may be due to rate limits. Cost basis data is shown, but current values and P&L cannot be calculated. Please wait a minute and refresh the page."
+        
+        db.close()
+        tracker.close()
+        
+        return jsonify({
+            'unrealized_pnl': unrealized_formatted,
+            'realized_pnl': summary['realized_pnl'],
+            'total_unrealized_gain_loss': summary['total_unrealized_gain_loss'],
+            'total_realized_gain_loss': summary['total_realized_gain_loss'],
+            'total_gain_loss': summary['total_gain_loss'],
+            'total_cost_basis': summary['total_cost_basis'],
+            'total_current_value': summary['total_current_value'],
+            'total_return_pct': summary['total_return_pct'],
+            'prices_failed': prices_failed,
+            'error': error_message
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/transactions/history')
+def get_transaction_history():
+    """Get transaction history"""
+    if not TRANSACTION_TRACKER_AVAILABLE:
+        return jsonify({'error': 'Transaction tracker not available'}), 500
+    
+    symbol = request.args.get('symbol')
+    limit = int(request.args.get('limit', 50))
+    
+    try:
+        db = PortfolioDatabase()
+        tracker = db.transaction_tracker
+        
+        # Get transaction history
+        transactions = tracker.get_transaction_history(symbol=symbol.upper() if symbol else None)
+        
+        # Limit results
+        transactions = transactions[:limit]
+        
+        # Format for JSON
+        transactions_formatted = []
+        for trans in transactions:
+            transactions_formatted.append({
+                'id': trans.id,
+                'timestamp': trans.timestamp.isoformat() if trans.timestamp else None,
+                'symbol': trans.symbol,
+                'transaction_type': trans.transaction_type.value,
+                'amount': trans.amount,
+                'price_per_unit': trans.price_per_unit,
+                'total_value': trans.total_value,
+                'fee': trans.fee,
+                'fee_currency': trans.fee_currency,
+                'exchange': trans.exchange,
+                'notes': trans.notes
+            })
+        
+        db.close()
+        tracker.close()
+        
+        return jsonify(transactions_formatted)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/transactions/cost-basis')
+def get_cost_basis():
+    """Get cost basis summary for all assets"""
+    if not TRANSACTION_TRACKER_AVAILABLE:
+        return jsonify({'error': 'Transaction tracker not available'}), 500
+    
+    try:
+        db = PortfolioDatabase()
+        tracker = db.transaction_tracker
+        
+        cost_basis = tracker.get_portfolio_cost_basis()
+        
+        db.close()
+        tracker.close()
+        
+        return jsonify(cost_basis)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 if __name__ == '__main__':

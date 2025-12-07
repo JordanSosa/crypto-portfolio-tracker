@@ -406,524 +406,6 @@ class BlockchainBalanceFetcher:
             print(f"Error fetching Solana balance: {e}")
             return None
     
-    def fetch_erc20_token_transaction_history(
-        self,
-        address: str,
-        token_contract: str,
-        limit: int = 50,
-        retry_count: int = 3
-    ) -> List[Dict]:
-        """
-        Fetch ERC-20 token transaction history from an address
-        
-        Args:
-            address: Ethereum address
-            token_contract: ERC-20 token contract address
-            limit: Maximum number of transactions to return
-            retry_count: Number of retry attempts
-            
-        Returns:
-            List of transaction dictionaries
-        """
-        if not self.etherscan_api_key:
-            print("    Warning: Etherscan API key required for token transaction history")
-            return []
-        
-        transactions = []
-        
-        for attempt in range(retry_count):
-            try:
-                # Get ERC-20 token transfers using Etherscan API V2
-                url = "https://api.etherscan.io/v2/api"
-                params = {
-                    "module": "account",
-                    "action": "tokentx",  # Token transfers
-                    "contractaddress": token_contract,
-                    "address": address,
-                    "startblock": 0,
-                    "endblock": 99999999,
-                    "page": 1,
-                    "offset": limit,
-                    "sort": "asc",  # Oldest first
-                    "chainid": "1",  # Ethereum Mainnet (required for V2)
-                    "apikey": self.etherscan_api_key
-                }
-                
-                response = requests.get(url, params=params, timeout=15)
-                
-                if response.status_code == 429:
-                    if attempt < retry_count - 1:
-                        wait_time = (attempt + 1) * 3
-                        print(f"    Rate limit hit, waiting {wait_time}s...")
-                        time.sleep(wait_time)
-                        continue
-                    break
-                
-                response.raise_for_status()
-                data = response.json()
-                
-                # Debug: Check Etherscan API response
-                print(f"    Debug: Etherscan Token API status: {response.status_code}")
-                print(f"    Debug: Etherscan response status field: {data.get('status')}")
-                print(f"    Debug: Etherscan response message: {data.get('message', 'N/A')}")
-                
-                if data.get("status") != "1":
-                    error_msg = data.get("message", "Unknown error")
-                    result = data.get("result", "")
-                    print(f"    Etherscan API error: {error_msg}")
-                    if "Invalid API Key" in str(error_msg):
-                        print("    Your Etherscan API key may be invalid. Check your config.")
-                    elif "rate limit" in str(error_msg).lower() or "Max rate limit" in str(error_msg):
-                        print("    Rate limit exceeded. Please wait and try again later.")
-                    elif "No transactions found" in str(result) or result == "[]":
-                        print("    No token transactions found for this address")
-                    else:
-                        print(f"    Result: {result[:200] if result else 'N/A'}")
-                    return []
-                
-                result = data.get("result", [])
-                if isinstance(result, str):
-                    if "rate limit" in result.lower() or "max rate limit" in result.lower():
-                        print(f"    Rate limit error in result: {result}")
-                        return []
-                    result = []
-                
-                print(f"    Debug: Found {len(result)} token transactions in Etherscan response")
-                
-                if len(result) > 0 and isinstance(result, list):
-                    print(f"    Debug: First transaction keys: {list(result[0].keys()) if isinstance(result[0], dict) else 'N/A'}")
-                
-                # Process token transfers
-                if isinstance(result, list) and len(result) > 0:
-                    for tx in result:
-                        from_address = tx.get("from", "").lower()
-                        to_address = tx.get("to", "").lower()
-                        address_lower = address.lower()
-                        
-                        # Get token amount (value is in smallest unit, need decimals)
-                        token_decimals = int(tx.get("tokenDecimal", "18"))
-                        value_raw = int(tx.get("value", "0"))
-                        token_amount = value_raw / (10 ** token_decimals)
-                        
-                        # Determine if this is incoming or outgoing
-                        if to_address == address_lower:
-                            # Incoming token transfer
-                            amount = token_amount
-                        elif from_address == address_lower:
-                            # Outgoing token transfer
-                            amount = -token_amount
-                        else:
-                            continue  # Not related to this address
-                        
-                        # Parse timestamp
-                        timestamp = None
-                        time_stamp = tx.get("timeStamp")
-                        if time_stamp:
-                            try:
-                                timestamp = datetime.fromtimestamp(int(time_stamp))
-                            except:
-                                pass
-                        
-                        # Token transfers don't have gas fees in the same way
-                        # The gas was paid in ETH, not tokens
-                        fee_token = 0.0
-                        
-                        transactions.append({
-                            'tx_hash': tx.get("hash", ""),
-                            'timestamp': timestamp,
-                            'amount': amount,
-                            'fee': fee_token,
-                            'confirmations': int(tx.get("confirmations", "0")),
-                            'address': address,
-                            'from': from_address,
-                            'to': to_address,
-                            'token_contract': token_contract,
-                            'token_symbol': tx.get("tokenSymbol", ""),
-                            'token_decimals': token_decimals
-                        })
-                
-                # Sort by timestamp
-                transactions.sort(key=lambda x: x['timestamp'] if x['timestamp'] else datetime.min)
-                return transactions
-                
-            except requests.exceptions.RequestException as e:
-                if attempt < retry_count - 1:
-                    wait_time = (attempt + 1) * 3
-                    print(f"    Error fetching transactions: {e}, retrying in {wait_time}s...")
-                    time.sleep(wait_time)
-                    continue
-                print(f"    Error fetching ERC-20 token transaction history: {e}")
-                if 'response' in locals():
-                    print(f"    Response status code: {response.status_code}")
-                    try:
-                        error_data = response.json()
-                        print(f"    Error response: {error_data}")
-                    except:
-                        print(f"    Error response text: {response.text[:500]}")
-                return []
-            except Exception as e:
-                print(f"    Unexpected error fetching ERC-20 token transactions: {e}")
-                import traceback
-                traceback.print_exc()
-                return []
-        
-        return transactions
-    
-    def fetch_xrp_transaction_history(
-        self,
-        address: str,
-        limit: int = 50,
-        retry_count: int = 3
-    ) -> List[Dict]:
-        """
-        Fetch XRP transaction history from an address
-        
-        Args:
-            address: XRP Ledger address
-            limit: Maximum number of transactions to return
-            retry_count: Number of retry attempts
-            
-        Returns:
-            List of transaction dictionaries
-        """
-        transactions = []
-        
-        for attempt in range(retry_count):
-            try:
-                # Using XRPL public API
-                url = "https://s1.ripple.com:51234"
-                payload = {
-                    "method": "account_tx",
-                    "params": [{
-                        "account": address,
-                        "ledger_index_min": -1,
-                        "ledger_index_max": -1,
-                        "limit": limit,
-                        "binary": False,
-                        "forward": False  # Get oldest first
-                    }]
-                }
-                
-                response = requests.post(url, json=payload, timeout=15)
-                
-                if response.status_code == 429:
-                    if attempt < retry_count - 1:
-                        wait_time = (attempt + 1) * 3
-                        print(f"    Rate limit hit, waiting {wait_time}s...")
-                        time.sleep(wait_time)
-                        continue
-                    break
-                
-                response.raise_for_status()
-                data = response.json()
-                
-                # Debug: Check XRPL API response
-                print(f"    Debug: XRPL API status: {response.status_code}")
-                
-                if "result" not in data or data["result"].get("status") != "success":
-                    error_msg = data.get("result", {}).get("error", "Unknown error")
-                    print(f"    XRPL API error: {error_msg}")
-                    return []
-                
-                tx_list = data["result"].get("transactions", [])
-                print(f"    Debug: Found {len(tx_list)} transactions in XRPL response")
-                
-                if len(tx_list) > 0:
-                    print(f"    Debug: First transaction keys: {list(tx_list[0].get('tx', {}).keys()) if tx_list[0].get('tx') else 'N/A'}")
-                
-                # Process transactions
-                for tx_entry in tx_list:
-                    tx = tx_entry.get("tx", {})
-                    meta = tx_entry.get("meta", {})
-                    
-                    tx_hash = tx.get("hash", "")
-                    tx_type = tx.get("TransactionType", "")
-                    
-                    # Only process Payment transactions for now
-                    if tx_type != "Payment":
-                        continue
-                    
-                    # Get account addresses
-                    account = tx.get("Account", "").lower()
-                    destination = tx.get("Destination", "").lower()
-                    address_lower = address.lower()
-                    
-                    # Get amount (XRP is in drops, 1 XRP = 1,000,000 drops)
-                    amount_str = tx.get("Amount", "0")
-                    if isinstance(amount_str, str):
-                        # XRP amount in drops
-                        try:
-                            drops = int(amount_str)
-                            xrp_amount = drops / 1000000.0
-                        except:
-                            continue
-                    else:
-                        # Could be issued currency (not XRP), skip for now
-                        continue
-                    
-                    # Determine if this is incoming or outgoing
-                    if destination == address_lower:
-                        # Incoming payment
-                        amount = xrp_amount
-                    elif account == address_lower:
-                        # Outgoing payment
-                        amount = -xrp_amount
-                    else:
-                        continue  # Not related to this address
-                    
-                    # Get fee (in drops)
-                    fee_drops = int(tx.get("Fee", "0"))
-                    fee_xrp = fee_drops / 1000000.0
-                    
-                    # Get timestamp from ledger close time
-                    timestamp = None
-                    ledger_time = tx.get("date")
-                    if ledger_time:
-                        try:
-                            # XRPL date is seconds since Ripple epoch (2000-01-01)
-                            ripple_epoch = 946684800  # Unix timestamp for 2000-01-01
-                            unix_timestamp = ripple_epoch + ledger_time
-                            timestamp = datetime.fromtimestamp(unix_timestamp)
-                        except:
-                            pass
-                    
-                    # Get transaction result
-                    transaction_result = meta.get("TransactionResult", "")
-                    confirmations = 1 if transaction_result == "tesSUCCESS" else 0
-                    
-                    transactions.append({
-                        'tx_hash': tx_hash,
-                        'timestamp': timestamp,
-                        'amount': amount,
-                        'fee': fee_xrp if account == address_lower else 0.0,  # Fee only for outgoing
-                        'confirmations': confirmations,
-                        'address': address,
-                        'tx_type': tx_type
-                    })
-                
-                # Sort by timestamp (oldest first)
-                transactions.sort(key=lambda x: x['timestamp'] if x['timestamp'] else datetime.min)
-                return transactions
-                
-            except requests.exceptions.RequestException as e:
-                if attempt < retry_count - 1:
-                    wait_time = (attempt + 1) * 3
-                    print(f"    Error fetching transactions: {e}, retrying in {wait_time}s...")
-                    time.sleep(wait_time)
-                    continue
-                print(f"    Error fetching XRP transaction history: {e}")
-                if 'response' in locals():
-                    print(f"    Response status code: {response.status_code}")
-                    try:
-                        error_data = response.json()
-                        print(f"    Error response: {error_data}")
-                    except:
-                        print(f"    Error response text: {response.text[:500]}")
-                return []
-            except Exception as e:
-                print(f"    Unexpected error fetching XRP transactions: {e}")
-                import traceback
-                traceback.print_exc()
-                return []
-        
-        return transactions
-    
-    def fetch_solana_transaction_history(
-        self,
-        address: str,
-        limit: int = 50,
-        retry_count: int = 3
-    ) -> List[Dict]:
-        """
-        Fetch Solana transaction history from an address
-        
-        Args:
-            address: Solana address
-            limit: Maximum number of transactions to return
-            retry_count: Number of retry attempts
-            
-        Returns:
-            List of transaction dictionaries
-        """
-        transactions = []
-        
-        for attempt in range(retry_count):
-            try:
-                # Using Solana public RPC endpoint
-                url = "https://api.mainnet-beta.solana.com"
-                
-                # Step 1: Get transaction signatures
-                payload = {
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "getSignaturesForAddress",
-                    "params": [
-                        address,
-                        {
-                            "limit": limit
-                        }
-                    ]
-                }
-                
-                response = requests.post(url, json=payload, timeout=15)
-                
-                if response.status_code == 429:
-                    if attempt < retry_count - 1:
-                        wait_time = (attempt + 1) * 3
-                        print(f"    Rate limit hit, waiting {wait_time}s...")
-                        time.sleep(wait_time)
-                        continue
-                    break
-                
-                response.raise_for_status()
-                data = response.json()
-                
-                # Debug: Check Solana API response
-                print(f"    Debug: Solana API status: {response.status_code}")
-                
-                if "error" in data:
-                    error_msg = data.get("error", {}).get("message", "Unknown error")
-                    print(f"    Solana API error: {error_msg}")
-                    return []
-                
-                signatures = data.get("result", [])
-                print(f"    Debug: Found {len(signatures)} transaction signatures")
-                
-                if not signatures:
-                    return []
-                
-                # Step 2: Get full transaction details for each signature
-                # Process in batches to avoid overwhelming the API
-                batch_size = 10
-                for i in range(0, len(signatures), batch_size):
-                    batch = signatures[i:i + batch_size]
-                    
-                    for sig_entry in batch:
-                        signature = sig_entry.get("signature")
-                        if not signature:
-                            continue
-                        
-                        # Get full transaction
-                        tx_payload = {
-                            "jsonrpc": "2.0",
-                            "id": 1,
-                            "method": "getTransaction",
-                            "params": [
-                                signature,
-                                {
-                                    "encoding": "json",
-                                    "maxSupportedTransactionVersion": 0
-                                }
-                            ]
-                        }
-                        
-                        tx_response = requests.post(url, json=tx_payload, timeout=15)
-                        if tx_response.status_code != 200:
-                            continue
-                        
-                        tx_data = tx_response.json()
-                        if "error" in tx_data or "result" not in tx_data:
-                            continue
-                        
-                        tx_result = tx_data.get("result")
-                        if not tx_result:
-                            continue
-                        
-                        # Parse transaction
-                        tx_meta = tx_result.get("meta", {})
-                        if tx_meta.get("err"):
-                            continue  # Skip failed transactions
-                        
-                        # Get timestamp
-                        block_time = tx_result.get("blockTime")
-                        timestamp = None
-                        if block_time:
-                            try:
-                                timestamp = datetime.fromtimestamp(block_time)
-                            except:
-                                pass
-                        
-                        # Calculate SOL amount from account balance changes
-                        pre_balances = tx_meta.get("preBalances", [])
-                        post_balances = tx_meta.get("postBalances", [])
-                        account_keys = tx_result.get("transaction", {}).get("message", {}).get("accountKeys", [])
-                        
-                        # Find our address in the account keys
-                        address_index = None
-                        for idx, key_info in enumerate(account_keys):
-                            if isinstance(key_info, str):
-                                if key_info == address:
-                                    address_index = idx
-                                    break
-                            elif isinstance(key_info, dict):
-                                if key_info.get("pubkey") == address:
-                                    address_index = idx
-                                    break
-                        
-                        if address_index is None or address_index >= len(pre_balances):
-                            continue
-                        
-                        # Calculate balance change (in lamports)
-                        pre_balance = pre_balances[address_index] if address_index < len(pre_balances) else 0
-                        post_balance = post_balances[address_index] if address_index < len(post_balances) else 0
-                        balance_change = post_balance - pre_balance
-                        
-                        # Convert to SOL (1 SOL = 1,000,000,000 lamports)
-                        sol_amount = balance_change / 1e9
-                        
-                        # Skip zero-amount transactions
-                        if abs(sol_amount) < 0.00000001:
-                            continue
-                        
-                        # Get fee (in lamports, paid by signer)
-                        fee_lamports = tx_meta.get("fee", 0)
-                        fee_sol = fee_lamports / 1e9
-                        
-                        # Determine if incoming or outgoing
-                        # If balance increased, it's incoming (positive)
-                        # If balance decreased, it's outgoing (negative)
-                        amount = sol_amount
-                        
-                        transactions.append({
-                            'tx_hash': signature,
-                            'timestamp': timestamp,
-                            'amount': amount,
-                            'fee': fee_sol if amount < 0 else 0.0,  # Fee only for outgoing
-                            'confirmations': 1,  # Solana transactions are final when included
-                            'address': address
-                        })
-                    
-                    # Small delay between batches
-                    if i + batch_size < len(signatures):
-                        time.sleep(0.5)
-                
-                # Sort by timestamp (oldest first)
-                transactions.sort(key=lambda x: x['timestamp'] if x['timestamp'] else datetime.min)
-                return transactions
-                
-            except requests.exceptions.RequestException as e:
-                if attempt < retry_count - 1:
-                    wait_time = (attempt + 1) * 3
-                    print(f"    Error fetching transactions: {e}, retrying in {wait_time}s...")
-                    time.sleep(wait_time)
-                    continue
-                print(f"    Error fetching Solana transaction history: {e}")
-                if 'response' in locals():
-                    print(f"    Response status code: {response.status_code}")
-                    try:
-                        error_data = response.json()
-                        print(f"    Error response: {error_data}")
-                    except:
-                        print(f"    Error response text: {response.text[:500]}")
-                return []
-            except Exception as e:
-                print(f"    Unexpected error fetching Solana transactions: {e}")
-                import traceback
-                traceback.print_exc()
-                return []
-        
-        return transactions
-    
     def fetch_all_balances(self, wallet_config: Dict, prompt_for_btc: bool = True) -> Dict[str, float]:
         """
         Fetch balances for all configured wallet addresses
@@ -1073,26 +555,8 @@ class BlockchainBalanceFetcher:
                 response.raise_for_status()
                 data = response.json()
                 
-                # Debug: Check API response structure
-                print(f"    Debug: BlockCypher API status: {response.status_code}")
-                print(f"    Debug: Response keys: {list(data.keys())}")
-                
-                if "txs" not in data:
-                    print(f"    Warning: No 'txs' key in BlockCypher response")
-                    print(f"    Available keys: {list(data.keys())}")
-                    if "error" in data:
-                        print(f"    Error message: {data.get('error')}")
-                    return []
-                
-                txs = data.get("txs", [])
-                print(f"    Debug: Found {len(txs)} transactions in API response")
-                
-                if len(txs) > 0:
-                    print(f"    Debug: First transaction keys: {list(txs[0].keys())}")
-                    print(f"    Debug: First transaction hash: {txs[0].get('hash', 'N/A')}")
-                
                 # Process transactions
-                for tx in txs:
+                for tx in data.get("txs", []):
                     tx_hash = tx.get("hash", "")
                     tx_time = tx.get("confirmed", "")
                     
@@ -1100,7 +564,6 @@ class BlockchainBalanceFetcher:
                     timestamp = None
                     if tx_time:
                         try:
-                            from datetime import datetime
                             timestamp = datetime.strptime(tx_time, "%Y-%m-%dT%H:%M:%SZ")
                         except:
                             pass
@@ -1152,18 +615,6 @@ class BlockchainBalanceFetcher:
                     time.sleep(wait_time)
                     continue
                 print(f"    Error fetching Bitcoin transaction history: {e}")
-                if 'response' in locals():
-                    print(f"    Response status code: {response.status_code}")
-                    try:
-                        error_data = response.json()
-                        print(f"    Error response: {error_data}")
-                    except:
-                        print(f"    Error response text: {response.text[:500]}")
-                return []
-            except Exception as e:
-                print(f"    Unexpected error fetching Bitcoin transactions: {e}")
-                import traceback
-                traceback.print_exc()
                 return []
         
         return transactions
@@ -1193,9 +644,8 @@ class BlockchainBalanceFetcher:
         
         for attempt in range(retry_count):
             try:
-                # Get normal transactions using Etherscan API V2
-                # V2 requires chainid parameter (1 = Ethereum Mainnet)
-                url = "https://api.etherscan.io/v2/api"
+                # Get normal transactions
+                url = "https://api.etherscan.io/api"
                 params = {
                     "module": "account",
                     "action": "txlist",
@@ -1205,7 +655,6 @@ class BlockchainBalanceFetcher:
                     "page": 1,
                     "offset": limit,
                     "sort": "asc",  # Oldest first
-                    "chainid": "1",  # Ethereum Mainnet (required for V2)
                     "apikey": self.etherscan_api_key
                 }
                 
@@ -1222,41 +671,8 @@ class BlockchainBalanceFetcher:
                 response.raise_for_status()
                 data = response.json()
                 
-                # Debug: Check Etherscan API response
-                print(f"    Debug: Etherscan API status: {response.status_code}")
-                print(f"    Debug: Etherscan response status field: {data.get('status')}")
-                print(f"    Debug: Etherscan response message: {data.get('message', 'N/A')}")
-                
-                if data.get("status") != "1":
-                    error_msg = data.get("message", "Unknown error")
-                    result = data.get("result", "")
-                    print(f"    Etherscan API error: {error_msg}")
-                    if "Invalid API Key" in str(error_msg):
-                        print("    Your Etherscan API key may be invalid. Check your config.")
-                    elif "rate limit" in str(error_msg).lower() or "Max rate limit" in str(error_msg):
-                        print("    Rate limit exceeded. Please wait and try again later.")
-                    elif "No transactions found" in str(result) or result == "[]":
-                        print("    No transactions found for this address (this is normal if the address has no activity)")
-                    else:
-                        print(f"    Result: {result[:200] if result else 'N/A'}")
-                    return []
-                
-                result = data.get("result", [])
-                if isinstance(result, str):
-                    # Sometimes Etherscan returns error messages as strings in result
-                    if "rate limit" in result.lower() or "max rate limit" in result.lower():
-                        print(f"    Rate limit error in result: {result}")
-                        return []
-                    result = []
-                
-                print(f"    Debug: Found {len(result)} transactions in Etherscan response")
-                
-                if len(result) > 0 and isinstance(result, list):
-                    print(f"    Debug: First transaction keys: {list(result[0].keys()) if isinstance(result[0], dict) else 'N/A'}")
-                
-                # Process transactions (status is already checked above)
-                if isinstance(result, list) and len(result) > 0:
-                    for tx in result:
+                if data.get("status") == "1":
+                    for tx in data.get("result", []):
                         from_address = tx.get("from", "").lower()
                         to_address = tx.get("to", "").lower()
                         address_lower = address.lower()
@@ -1280,7 +696,6 @@ class BlockchainBalanceFetcher:
                         time_stamp = tx.get("timeStamp")
                         if time_stamp:
                             try:
-                                from datetime import datetime
                                 timestamp = datetime.fromtimestamp(int(time_stamp))
                             except:
                                 pass
@@ -1305,25 +720,13 @@ class BlockchainBalanceFetcher:
                 transactions.sort(key=lambda x: x['timestamp'] if x['timestamp'] else datetime.min)
                 return transactions
                 
-            except requests.exceptions.RequestException as e:
+            except Exception as e:
                 if attempt < retry_count - 1:
                     wait_time = (attempt + 1) * 3
                     print(f"    Error fetching transactions: {e}, retrying in {wait_time}s...")
                     time.sleep(wait_time)
                     continue
                 print(f"    Error fetching Ethereum transaction history: {e}")
-                if 'response' in locals():
-                    print(f"    Response status code: {response.status_code}")
-                    try:
-                        error_data = response.json()
-                        print(f"    Error response: {error_data}")
-                    except:
-                        print(f"    Error response text: {response.text[:500]}")
-                return []
-            except Exception as e:
-                print(f"    Unexpected error fetching Ethereum transactions: {e}")
-                import traceback
-                traceback.print_exc()
                 return []
         
         return transactions

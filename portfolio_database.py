@@ -32,6 +32,8 @@ class PortfolioDatabase:
         self.db_path = db_path
         self.conn = None
         self._initialize_database()
+        # Initialize transaction tracker (lazy import to avoid circular dependencies)
+        self._transaction_tracker = None
     
     def _initialize_database(self):
         """Create database tables if they don't exist"""
@@ -944,4 +946,18 @@ class PortfolioDatabase:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit"""
         self.close()
+    
+    @property
+    def transaction_tracker(self):
+        """Lazy-load transaction tracker"""
+        if self._transaction_tracker is None:
+            try:
+                from transaction_tracker import TransactionTracker
+                self._transaction_tracker = TransactionTracker(self.db_path)
+            except ImportError:
+                raise ImportError(
+                    "transaction_tracker module not found. "
+                    "Make sure transaction_tracker.py is in the same directory."
+                )
+        return self._transaction_tracker
 

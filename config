@@ -1,0 +1,17 @@
+{
+  "etherscan_api_key": "YOUR_ETHERSCAN_API_KEY_HERE",
+  "btc_balance": 0.00622109,
+  "btc_address": "YOUR_BITCOIN_ADDRESS_HERE",
+  "btc_xpub": "xpub6Bxa4BUfeKtqJPScn1V3K6WuPz7nKf2BHScqnuxxzn2FPs12yb6RHai6PMmhssxPTzQb6Ni1LiHkMcJftJ6eH7LeUhqWDn9FrW9REFhHKa2",
+  "eth_address": "YOUR_ETHEREUM_ADDRESS_HERE",
+  "xrp_address": "YOUR_XRP_ADDRESS_HERE",
+  "sol_address": "YOUR_SOLANA_ADDRESS_HERE",
+  "erc20_tokens": [
+    {
+      "symbol": "LINK",
+      "contract": "0x514910771AF9Ca656af840dff83E8264EcF986CA",
+      "decimals": 18
+    }
+  ]
+}
+

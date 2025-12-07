@@ -78,6 +78,46 @@ async function loadRebalancingData() {
     }
 }
 
+// Load transaction P&L data
+async function loadTransactionPnL() {
+    try {
+        const response = await fetch(`${API_BASE}/api/transactions/pnl`);
+        if (!response.ok) throw new Error('Failed to load transaction P&L');
+        return await response.json();
+    } catch (error) {
+        console.error('Error loading transaction P&L:', error);
+        return null;
+    }
+}
+
+// Load transaction history
+async function loadTransactionHistory(symbol = null, limit = 20) {
+    try {
+        let url = `${API_BASE}/api/transactions/history?limit=${limit}`;
+        if (symbol) {
+            url += `&symbol=${symbol}`;
+        }
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('Failed to load transaction history');
+        return await response.json();
+    } catch (error) {
+        console.error('Error loading transaction history:', error);
+        return [];
+    }
+}
+
+// Load cost basis data
+async function loadCostBasis() {
+    try {
+        const response = await fetch(`${API_BASE}/api/transactions/cost-basis`);
+        if (!response.ok) throw new Error('Failed to load cost basis');
+        return await response.json();
+    } catch (error) {
+        console.error('Error loading cost basis:', error);
+        return null;
+    }
+}
+
 // Update portfolio summary
 function updatePortfolioSummary(data, performance) {
     document.getElementById('totalValue').textContent = formatCurrency(data.total_value);
@@ -395,14 +435,257 @@ function showError(message) {
     container.insertBefore(errorDiv, container.firstChild);
 }
 
+// Update performance metrics display
+function updatePerformanceMetrics(performance) {
+    const container = document.getElementById('performanceMetricsContainer');
+    container.innerHTML = '';
+    
+    if (!performance) {
+        container.innerHTML = '<p class="loading">No performance data available</p>';
+        return;
+    }
+    
+    let html = '<div class="performance-metrics-grid">';
+    
+    // Returns section
+    if (performance.returns) {
+        html += '<div class="performance-card">';
+        html += '<h3>Returns</h3>';
+        html += '<div class="metrics-list">';
+        
+        if (performance.returns.ytd !== undefined) {
+            const ytdClass = performance.returns.ytd >= 0 ? 'positive' : 'negative';
+            html += `<div class="metric-item">
+                <span class="metric-label">YTD Return:</span>
+                <span class="metric-value ${ytdClass}">${formatPercent(performance.returns.ytd)}</span>
+            </div>`;
+        }
+        
+        if (performance.returns.all_time !== undefined) {
+            const allTimeClass = performance.returns.all_time >= 0 ? 'positive' : 'negative';
+            html += `<div class="metric-item">
+                <span class="metric-label">All-Time Return:</span>
+                <span class="metric-value ${allTimeClass}">${formatPercent(performance.returns.all_time)}</span>
+            </div>`;
+        }
+        
+        html += '</div></div>';
+    }
+    
+    // Risk-adjusted metrics
+    html += '<div class="performance-card">';
+    html += '<h3>Risk-Adjusted Metrics</h3>';
+    html += '<div class="metrics-list">';
+    
+    if (performance.sharpe_ratio !== null && performance.sharpe_ratio !== undefined) {
+        html += `<div class="metric-item">
+            <span class="metric-label">Sharpe Ratio:</span>
+            <span class="metric-value">${performance.sharpe_ratio.toFixed(2)}</span>
+        </div>`;
+    }
+    
+    if (performance.sortino_ratio !== null && performance.sortino_ratio !== undefined) {
+        html += `<div class="metric-item">
+            <span class="metric-label">Sortino Ratio:</span>
+            <span class="metric-value">${performance.sortino_ratio.toFixed(2)}</span>
+        </div>`;
+    }
+    
+    html += '</div></div>';
+    
+    // Drawdown section
+    if (performance.max_drawdown) {
+        html += '<div class="performance-card">';
+        html += '<h3>Maximum Drawdown</h3>';
+        html += '<div class="metrics-list">';
+        
+        html += `<div class="metric-item">
+            <span class="metric-label">Max Drawdown:</span>
+            <span class="metric-value negative">${performance.max_drawdown.max_drawdown_pct.toFixed(2)}%</span>
+        </div>`;
+        
+        html += `<div class="metric-item">
+            <span class="metric-label">Drawdown Value:</span>
+            <span class="metric-value">${formatCurrency(performance.max_drawdown.max_drawdown_value)}</span>
+        </div>`;
+        
+        if (performance.max_drawdown.peak_date) {
+            html += `<div class="metric-item">
+                <span class="metric-label">Peak Date:</span>
+                <span class="metric-value">${new Date(performance.max_drawdown.peak_date).toLocaleDateString()}</span>
+            </div>`;
+        }
+        
+        if (performance.max_drawdown.trough_date) {
+            html += `<div class="metric-item">
+                <span class="metric-label">Trough Date:</span>
+                <span class="metric-value">${new Date(performance.max_drawdown.trough_date).toLocaleDateString()}</span>
+            </div>`;
+        }
+        
+        if (performance.max_drawdown.days_to_recover !== null) {
+            html += `<div class="metric-item">
+                <span class="metric-label">Days to Recover:</span>
+                <span class="metric-value">${performance.max_drawdown.days_to_recover} days</span>
+            </div>`;
+        }
+        
+        html += '</div></div>';
+    }
+    
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+// Update transaction tracking display
+function updateTransactionTracking(pnlData, costBasis, transactionHistory) {
+    const container = document.getElementById('transactionTrackingContainer');
+    container.innerHTML = '';
+    
+    if (!pnlData) {
+        container.innerHTML = '<p class="loading">No transaction tracking data available. Start recording transactions to see P&L data.</p>';
+        return;
+    }
+    
+    let html = '';
+    
+    // Show error message if prices failed to fetch
+    if (pnlData.prices_failed || pnlData.error) {
+        html += '<div class="error-message" style="background: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 5px; margin-bottom: 20px; color: #856404;">';
+        html += '<strong>⚠️ Price Update Failed:</strong> ';
+        html += pnlData.error || 'Unable to fetch current prices. This may be due to API rate limits. Cost basis data is shown below, but current values and P&L cannot be calculated. Please wait a minute and refresh the page.';
+        html += '</div>';
+    }
+    
+    // P&L Summary
+    html += '<div class="pnl-summary-section">';
+    html += '<h3>P&L Summary</h3>';
+    html += '<div class="pnl-summary-grid">';
+    
+    html += `<div class="pnl-card">
+        <div class="pnl-label">Total Cost Basis</div>
+        <div class="pnl-value">${formatCurrency(pnlData.total_cost_basis)}</div>
+    </div>`;
+    
+    html += `<div class="pnl-card">
+        <div class="pnl-label">Current Value</div>
+        <div class="pnl-value">${formatCurrency(pnlData.total_current_value)}</div>
+    </div>`;
+    
+    const totalReturnClass = pnlData.total_return_pct >= 0 ? 'positive' : 'negative';
+    html += `<div class="pnl-card">
+        <div class="pnl-label">Total Return</div>
+        <div class="pnl-value ${totalReturnClass}">${formatPercent(pnlData.total_return_pct)}</div>
+    </div>`;
+    
+    const unrealizedClass = pnlData.total_unrealized_gain_loss >= 0 ? 'positive' : 'negative';
+    html += `<div class="pnl-card">
+        <div class="pnl-label">Unrealized P&L</div>
+        <div class="pnl-value ${unrealizedClass}">${formatCurrency(pnlData.total_unrealized_gain_loss)}</div>
+    </div>`;
+    
+    const realizedClass = pnlData.total_realized_gain_loss >= 0 ? 'positive' : 'negative';
+    html += `<div class="pnl-card">
+        <div class="pnl-label">Realized P&L</div>
+        <div class="pnl-value ${realizedClass}">${formatCurrency(pnlData.total_realized_gain_loss)}</div>
+    </div>`;
+    
+    const totalClass = pnlData.total_gain_loss >= 0 ? 'positive' : 'negative';
+    html += `<div class="pnl-card">
+        <div class="pnl-label">Total Gain/Loss</div>
+        <div class="pnl-value ${totalClass}">${formatCurrency(pnlData.total_gain_loss)}</div>
+    </div>`;
+    
+    html += '</div></div>';
+    
+    // Unrealized P&L by Asset
+    if (pnlData.unrealized_pnl && Object.keys(pnlData.unrealized_pnl).length > 0) {
+        html += '<div class="unrealized-pnl-section">';
+        html += '<h3>Unrealized P&L by Asset</h3>';
+        html += '<table class="pnl-table">';
+        html += '<thead><tr><th>Asset</th><th>Amount</th><th>Avg Cost Basis</th><th>Current Price</th><th>Cost Basis</th><th>Current Value</th><th>Unrealized P&L</th><th>Return %</th></tr></thead>';
+        html += '<tbody>';
+        
+        const sortedUnrealized = Object.values(pnlData.unrealized_pnl).sort((a, b) => 
+            Math.abs(b.unrealized_gain_loss) - Math.abs(a.unrealized_gain_loss)
+        );
+        
+        sortedUnrealized.forEach(pnl => {
+            const pnlClass = pnl.unrealized_gain_loss >= 0 ? 'positive' : 'negative';
+            html += `<tr>
+                <td><strong>${pnl.symbol}</strong></td>
+                <td>${pnl.current_amount.toFixed(8)}</td>
+                <td>${formatCurrency(pnl.average_cost_basis)}</td>
+                <td>${formatCurrency(pnl.current_price)}</td>
+                <td>${formatCurrency(pnl.total_cost_basis)}</td>
+                <td>${formatCurrency(pnl.current_value)}</td>
+                <td class="${pnlClass}">${formatCurrency(pnl.unrealized_gain_loss)}</td>
+                <td class="${pnlClass}">${formatPercent(pnl.unrealized_gain_loss_pct)}</td>
+            </tr>`;
+        });
+        
+        html += '</tbody></table></div>';
+    }
+    
+    // Cost Basis Summary
+    if (costBasis && Object.keys(costBasis).length > 0) {
+        html += '<div class="cost-basis-section">';
+        html += '<h3>Cost Basis Summary</h3>';
+        html += '<table class="pnl-table">';
+        html += '<thead><tr><th>Asset</th><th>Amount</th><th>Average Cost</th><th>Total Cost Basis</th></tr></thead>';
+        html += '<tbody>';
+        
+        Object.entries(costBasis).forEach(([symbol, data]) => {
+            html += `<tr>
+                <td><strong>${symbol}</strong></td>
+                <td>${data.amount.toFixed(8)}</td>
+                <td>${formatCurrency(data.average_cost_per_unit)}</td>
+                <td>${formatCurrency(data.total_cost_basis)}</td>
+            </tr>`;
+        });
+        
+        html += '</tbody></table></div>';
+    }
+    
+    // Recent Transactions
+    if (transactionHistory && transactionHistory.length > 0) {
+        html += '<div class="transaction-history-section">';
+        html += '<h3>Recent Transactions</h3>';
+        html += '<table class="pnl-table">';
+        html += '<thead><tr><th>Date</th><th>Type</th><th>Asset</th><th>Amount</th><th>Price</th><th>Value</th><th>Fee</th><th>Exchange</th></tr></thead>';
+        html += '<tbody>';
+        
+        transactionHistory.slice(0, 10).forEach(trans => {
+            const typeClass = trans.transaction_type === 'BUY' ? 'buy' : 'sell';
+            html += `<tr>
+                <td>${new Date(trans.timestamp).toLocaleDateString()}</td>
+                <td><span class="transaction-type ${typeClass}">${trans.transaction_type}</span></td>
+                <td><strong>${trans.symbol}</strong></td>
+                <td>${trans.amount.toFixed(8)}</td>
+                <td>${formatCurrency(trans.price_per_unit)}</td>
+                <td>${formatCurrency(trans.total_value)}</td>
+                <td>${formatCurrency(trans.fee)}</td>
+                <td>${trans.exchange || 'N/A'}</td>
+            </tr>`;
+        });
+        
+        html += '</tbody></table></div>';
+    }
+    
+    container.innerHTML = html;
+}
+
 // Initialize dashboard
 async function initDashboard() {
     try {
         // Load all data in parallel
-        const [portfolioData, performance, rebalancing] = await Promise.all([
+        const [portfolioData, performance, rebalancing, transactionPnL, costBasis, transactionHistory] = await Promise.all([
             loadPortfolioData(),
             loadPerformanceMetrics(),
-            loadRebalancingData()
+            loadRebalancingData(),
+            loadTransactionPnL(),
+            loadCostBasis(),
+            loadTransactionHistory(null, 10)
         ]);
         
         if (!portfolioData) {
@@ -415,6 +698,8 @@ async function initDashboard() {
         updateAllocationTable(portfolioData.portfolio, portfolioData.analyses);
         updateRecommendations(portfolioData.analyses);
         updateRebalancing(rebalancing);
+        updatePerformanceMetrics(performance);
+        updateTransactionTracking(transactionPnL, costBasis, transactionHistory);
         
         // Create history chart
         await createPortfolioValueChart();

@@ -5,16 +5,24 @@ Calculates exact buy/sell amounts needed to reach target allocations
 
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
-from portfolio_evaluator import Asset
 
 try:
-    from transaction_tracker import TransactionTracker, TransactionType
+    from .portfolio_evaluator import Asset
+except ImportError:
+    from portfolio_evaluator import Asset
+
+try:
+    from .transaction_tracker import TransactionTracker, TransactionType
     TRANSACTION_TRACKER_AVAILABLE = True
 except ImportError:
-    TRANSACTION_TRACKER_AVAILABLE = False
+    try:
+        from transaction_tracker import TransactionTracker, TransactionType
+        TRANSACTION_TRACKER_AVAILABLE = True
+    except ImportError:
+        TRANSACTION_TRACKER_AVAILABLE = False
 
 try:
-    from constants import DEFAULT_TARGET_ALLOCATIONS, COIN_NAMES, REBALANCE_THRESHOLD
+    from .constants import DEFAULT_TARGET_ALLOCATIONS, COIN_NAMES, REBALANCE_THRESHOLD
 except ImportError:
     # Fallback if constants module not available
     DEFAULT_TARGET_ALLOCATIONS = {

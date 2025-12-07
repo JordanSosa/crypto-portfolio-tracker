@@ -530,6 +530,202 @@ tbody tr:hover {
     color: #92400e;
 }
 
+/* Performance Metrics Section */
+.performance-metrics-section {
+    background: white;
+    padding: 30px;
+    border-radius: 10px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.performance-metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
+    margin-top: 20px;
+}
+
+.performance-card {
+    background: #f9fafb;
+    padding: 20px;
+    border-radius: 8px;
+    border: 1px solid #e5e7eb;
+}
+
+.performance-card h3 {
+    color: #1f2937;
+    margin-bottom: 15px;
+    font-size: 18px;
+    border-bottom: 2px solid #667eea;
+    padding-bottom: 8px;
+}
+
+.metrics-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.metric-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px;
+    background: white;
+    border-radius: 6px;
+}
+
+.metric-label {
+    color: #6b7280;
+    font-size: 14px;
+}
+
+.metric-value {
+    font-size: 16px;
+    font-weight: 600;
+    color: #1f2937;
+}
+
+.metric-value.positive {
+    color: #10b981;
+}
+
+.metric-value.negative {
+    color: #ef4444;
+}
+
+/* Transaction Tracking Section */
+.transaction-tracking-section {
+    background: white;
+    padding: 30px;
+    border-radius: 10px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.pnl-summary-section {
+    margin-bottom: 30px;
+}
+
+.pnl-summary-section h3 {
+    color: #1f2937;
+    margin-bottom: 20px;
+    font-size: 20px;
+    border-bottom: 2px solid #667eea;
+    padding-bottom: 10px;
+}
+
+.pnl-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 15px;
+}
+
+.pnl-card {
+    background: #f9fafb;
+    padding: 20px;
+    border-radius: 8px;
+    border: 1px solid #e5e7eb;
+    text-align: center;
+}
+
+.pnl-label {
+    color: #6b7280;
+    font-size: 14px;
+    margin-bottom: 8px;
+}
+
+.pnl-value {
+    font-size: 24px;
+    font-weight: 700;
+    color: #1f2937;
+}
+
+.pnl-value.positive {
+    color: #10b981;
+}
+
+.pnl-value.negative {
+    color: #ef4444;
+}
+
+.unrealized-pnl-section,
+.cost-basis-section,
+.transaction-history-section {
+    margin-top: 30px;
+}
+
+.unrealized-pnl-section h3,
+.cost-basis-section h3,
+.transaction-history-section h3 {
+    color: #1f2937;
+    margin-bottom: 15px;
+    font-size: 18px;
+    border-bottom: 2px solid #667eea;
+    padding-bottom: 8px;
+}
+
+.pnl-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: white;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.pnl-table th {
+    background: #667eea;
+    color: white;
+    padding: 12px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.pnl-table td {
+    padding: 12px;
+    border-bottom: 1px solid #e5e7eb;
+    font-size: 14px;
+}
+
+.pnl-table tr:last-child td {
+    border-bottom: none;
+}
+
+.pnl-table tr:hover {
+    background: #f9fafb;
+}
+
+.pnl-table .positive {
+    color: #10b981;
+    font-weight: 600;
+}
+
+.pnl-table .negative {
+    color: #ef4444;
+    font-weight: 600;
+}
+
+.transaction-type {
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.transaction-type.buy {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.transaction-type.sell {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
 /* Responsive Design */
 @media (max-width: 768px) {
     .allocation-container {

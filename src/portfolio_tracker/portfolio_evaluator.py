@@ -15,25 +15,37 @@ from dataclasses import dataclass
 from enum import Enum
 
 try:
-    from blockchain_balance_fetcher import BlockchainBalanceFetcher
+    from .blockchain_balance_fetcher import BlockchainBalanceFetcher
     BLOCKCHAIN_FETCHER_AVAILABLE = True
 except ImportError:
-    BLOCKCHAIN_FETCHER_AVAILABLE = False
+    try:
+        from blockchain_balance_fetcher import BlockchainBalanceFetcher
+        BLOCKCHAIN_FETCHER_AVAILABLE = True
+    except ImportError:
+        BLOCKCHAIN_FETCHER_AVAILABLE = False
 
 try:
-    from portfolio_database import PortfolioDatabase
+    from .portfolio_database import PortfolioDatabase
     DATABASE_AVAILABLE = True
 except ImportError:
-    DATABASE_AVAILABLE = False
+    try:
+        from portfolio_database import PortfolioDatabase
+        DATABASE_AVAILABLE = True
+    except ImportError:
+        DATABASE_AVAILABLE = False
 
 try:
-    from portfolio_rebalancer import PortfolioRebalancer
+    from .portfolio_rebalancer import PortfolioRebalancer
     REBALANCER_AVAILABLE = True
 except ImportError:
-    REBALANCER_AVAILABLE = False
+    try:
+        from portfolio_rebalancer import PortfolioRebalancer
+        REBALANCER_AVAILABLE = True
+    except ImportError:
+        REBALANCER_AVAILABLE = False
 
 try:
-    from constants import (
+    from .constants import (
         COINGECKO_BASE_URL,
         COIN_IDS,
         COIN_NAMES,
@@ -195,17 +207,8 @@ class PortfolioEvaluator:
                 
                 # Handle rate limiting (429 Too Many Requests)
                 if response.status_code == 429:
-                    # Check Retry-After header if available
-                    retry_after = response.headers.get('Retry-After')
-                    if retry_after:
-                        try:
-                            wait_time = int(retry_after)
-                        except (ValueError, TypeError):
-                            wait_time = (attempt + 1) * API_RATE_LIMIT_BACKOFF_BASE * 3
-                    else:
-                        wait_time = (attempt + 1) * API_RATE_LIMIT_BACKOFF_BASE * 3
-                    
                     if attempt < retry_count - 1:
+                        wait_time = (attempt + 1) * API_RATE_LIMIT_BACKOFF_BASE
                         print(f"    Rate limit hit. Waiting {wait_time} seconds before retry...")
                         time.sleep(wait_time)
                         continue
@@ -406,7 +409,12 @@ class PortfolioEvaluator:
             TechnicalIndicatorsData object or None if insufficient data
         """
         try:
-            from technical_indicators import TechnicalIndicators
+            from .technical_indicators import TechnicalIndicators
+        except ImportError:
+            try:
+                from technical_indicators import TechnicalIndicators
+            except ImportError:
+                TechnicalIndicators = None
         except ImportError:
             return None
         
@@ -555,12 +563,14 @@ class PortfolioEvaluator:
                 )
             elif rsi > RSI_EXTREME_OVERBOUGHT:  # Very overbought
                 reasons.append(f"Extremely overbought (RSI: {rsi:.1f})")
-                # Check if we should DCA out for profit-taking
-                # If allocation is above target and extremely overbought, suggest DCA out
-                if asset.allocation_percent > 10:  # Has meaningful position
-                    # Check if we have target allocation info
-                    try:
-                        from portfolio_rebalancer import PortfolioRebalancer
+                    # Check if we should DCA out for profit-taking
+                    # If allocation is above target and extremely overbought, suggest DCA out
+                    if asset.allocation_percent > 10:  # Has meaningful position
+                        # Check if we have target allocation info
+                        try:
+                            from .portfolio_rebalancer import PortfolioRebalancer
+                        except ImportError:
+                            from portfolio_rebalancer import PortfolioRebalancer
                         rebalancer = PortfolioRebalancer()
                         target_allocation = rebalancer.target_allocations.get(asset.symbol, 0)
                         if asset.allocation_percent > target_allocation:
@@ -609,6 +619,8 @@ class PortfolioEvaluator:
                 if asset.allocation_percent > 10:  # Has meaningful position
                     # Check if allocation is above target and we have strong gains
                     try:
+                        from .portfolio_rebalancer import PortfolioRebalancer
+                    except ImportError:
                         from portfolio_rebalancer import PortfolioRebalancer
                         rebalancer = PortfolioRebalancer()
                         target_allocation = rebalancer.target_allocations.get(asset.symbol, 0)
@@ -684,6 +696,8 @@ class PortfolioEvaluator:
                 # Bearish MACD with overbought RSI - potential reversal
                 if asset.allocation_percent > 10:  # Has meaningful position
                     try:
+                        from .portfolio_rebalancer import PortfolioRebalancer
+                    except ImportError:
                         from portfolio_rebalancer import PortfolioRebalancer
                         rebalancer = PortfolioRebalancer()
                         target_allocation = rebalancer.target_allocations.get(asset.symbol, 0)
@@ -1114,75 +1128,21 @@ class PortfolioEvaluator:
                     print("\n" + "-" * 80)
                     print("PERFORMANCE METRICS")
                     print("-" * 80)
-                    print("Returns:")
                     if 'daily' in returns:
-                        print(f"  24h Return: {returns['daily']:+.2f}%")
+                        print(f"24h Return: {returns['daily']:+.2f}%")
                     if 'weekly' in returns:
-                        print(f"  7d Return: {returns['weekly']:+.2f}%")
+                        print(f"7d Return: {returns['weekly']:+.2f}%")
                     if 'monthly' in returns:
-                        print(f"  30d Return: {returns['monthly']:+.2f}%")
+                        print(f"30d Return: {returns['monthly']:+.2f}%")
                     if 'ytd' in returns:
-                        print(f"  YTD Return: {returns['ytd']:+.2f}%")
+                        print(f"YTD Return: {returns['ytd']:+.2f}%")
                     if 'all_time' in returns:
-                        print(f"  All-Time Return: {returns['all_time']:+.2f}%")
-                    
-                    # Advanced metrics
-                    print("\nRisk-Adjusted Metrics:")
-                    sharpe = db.calculate_sharpe_ratio(days=365)
-                    if sharpe is not None:
-                        sharpe_rating = "Excellent" if sharpe > 3 else "Very Good" if sharpe > 2 else "Good" if sharpe > 1 else "Below Average"
-                        print(f"  Sharpe Ratio: {sharpe:.2f} ({sharpe_rating})")
-                    
-                    sortino = db.calculate_sortino_ratio(days=365)
-                    if sortino is not None:
-                        if sortino < 999:
-                            sortino_rating = "Excellent" if sortino > 3 else "Very Good" if sortino > 2 else "Good" if sortino > 1 else "Below Average"
-                            print(f"  Sortino Ratio: {sortino:.2f} ({sortino_rating})")
-                        else:
-                            print(f"  Sortino Ratio: Perfect (no downside volatility)")
-                    
-                    # Maximum Drawdown
-                    drawdown = db.calculate_max_drawdown(days=365)
-                    if drawdown:
-                        print(f"\nMaximum Drawdown:")
-                        print(f"  Drawdown: {drawdown['max_drawdown_pct']:.2f}% (AU${drawdown['max_drawdown_value']:,.2f})")
-                        if drawdown['peak_date']:
-                            print(f"  Peak Date: {drawdown['peak_date'].strftime('%Y-%m-%d')}")
-                        if drawdown['trough_date']:
-                            print(f"  Trough Date: {drawdown['trough_date'].strftime('%Y-%m-%d')}")
-                        if drawdown['recovery_date']:
-                            print(f"  Recovery Date: {drawdown['recovery_date'].strftime('%Y-%m-%d')}")
-                            if drawdown['days_to_recover']:
-                                print(f"  Days to Recover: {drawdown['days_to_recover']}")
-                        elif drawdown['trough_date']:
-                            print(f"  Status: Not yet recovered")
-                    
-                    # Benchmark Comparison
-                    benchmark = db.calculate_benchmark_comparison(benchmark_symbol="BTC", days=365)
-                    if benchmark and 'error' not in benchmark:
-                        print(f"\nBenchmark Comparison (vs BTC):")
-                        if benchmark.get('portfolio_return') is not None:
-                            print(f"  Portfolio Return: {benchmark['portfolio_return']:+.2f}%")
-                        if benchmark.get('benchmark_return') is not None:
-                            print(f"  BTC Return: {benchmark['benchmark_return']:+.2f}%")
-                        if benchmark.get('excess_return') is not None:
-                            outperformance = benchmark['excess_return']
-                            status = "Outperforming" if outperformance > 0 else "Underperforming"
-                            print(f"  Excess Return: {outperformance:+.2f}% ({status})")
-                        if benchmark.get('beta') is not None:
-                            beta = benchmark['beta']
-                            beta_desc = "More volatile" if beta > 1 else "Less volatile" if beta < 1 else "Similar volatility"
-                            print(f"  Beta: {beta:.2f} ({beta_desc} than BTC)")
-                    elif benchmark and 'error' in benchmark:
-                        print(f"\nBenchmark Comparison: {benchmark['error']}")
-                    
+                        print(f"All-Time Return: {returns['all_time']:+.2f}%")
                     snapshot_count = db.get_snapshot_count()
-                    print(f"\nHistorical Snapshots: {snapshot_count}")
+                    print(f"Historical Snapshots: {snapshot_count}")
                 db.close()
             except Exception as e:
                 print(f"\nNote: Could not load historical data: {e}")
-                import traceback
-                traceback.print_exc()
         
         # Get rebalancing actions for summary (calculate once, use multiple times)
         rebalancing_actions = []
@@ -1308,6 +1268,12 @@ def load_portfolio_from_balances(balances: Dict[str, float], market_data: Dict) 
     Returns:
         Dictionary of Asset objects
     """
+    # Import COIN_NAMES
+    try:
+        from .constants import COIN_NAMES
+    except ImportError:
+        from constants import COIN_NAMES
+    
     portfolio = {}
     total_value = 0.0
     
@@ -1339,18 +1305,27 @@ def load_portfolio_from_balances(balances: Dict[str, float], market_data: Dict) 
     return portfolio
 
 
-def load_portfolio_from_wallet(wallet_config_path: str = "wallet_config.json", prompt_for_btc: bool = True) -> Tuple[Optional[Dict[str, Asset]], Optional[Dict]]:
+def load_portfolio_from_wallet(wallet_config_path: str = None, prompt_for_btc: bool = True) -> Tuple[Optional[Dict[str, Asset]], Optional[Dict]]:
     """
     Load portfolio automatically from wallet addresses
     
     Args:
-        wallet_config_path: Path to wallet configuration file
+        wallet_config_path: Path to wallet configuration file (defaults to wallet_config.json in root or config/)
         prompt_for_btc: Whether to prompt for Bitcoin balance if not in config (default: True)
                        Set to False for non-interactive use (e.g., API servers)
         
     Returns:
         Tuple of (Dictionary of Asset objects, market_data Dict) or (None, None) if loading fails
     """
+    if wallet_config_path is None:
+        # Try config directory first, then root
+        if os.path.exists('config/wallet_config.json'):
+            wallet_config_path = 'config/wallet_config.json'
+        elif os.path.exists('wallet_config.json'):
+            wallet_config_path = 'wallet_config.json'
+        else:
+            wallet_config_path = 'wallet_config.json'
+    
     if not BLOCKCHAIN_FETCHER_AVAILABLE:
         print("Error: blockchain_balance_fetcher module not available")
         return None, None
@@ -1468,7 +1443,7 @@ def print_portfolio_history(days: int = 30):
         print(f"Error loading portfolio history: {e}")
 
 
-def main(save_snapshot: bool = True, show_rebalancing: bool = True):
+def main(save_snapshot: bool = True, show_rebalancing: bool = True, wallet_config_path: str = "wallet_config.json"):
     """
     Main function - initialize portfolio and run evaluation
     
@@ -1478,13 +1453,19 @@ def main(save_snapshot: bool = True, show_rebalancing: bool = True):
     """
     
     # Try to load portfolio from wallet addresses first
-    portfolio, market_data = load_portfolio_from_wallet()
+    portfolio, market_data = load_portfolio_from_wallet(wallet_config_path=wallet_config_path)
     
     # Fall back to manual portfolio if wallet loading fails
     if portfolio is None:
         market_data = None  # Will need to fetch it
         print("\nUsing manual portfolio configuration...")
         print("(To use automatic wallet syncing, set up wallet_config.json)\n")
+        
+        # Import COIN_NAMES for manual portfolio
+        try:
+            from .constants import COIN_NAMES
+        except ImportError:
+            from constants import COIN_NAMES
         
         # Initialize portfolio based on the dashboard data
         portfolio = {
@@ -1562,59 +1543,4 @@ def main(save_snapshot: bool = True, show_rebalancing: bool = True):
         print("Error: Could not generate portfolio analysis.")
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Cryptocurrency Portfolio Evaluator with Historical Tracking"
-    )
-    parser.add_argument(
-        "--history",
-        type=int,
-        metavar="DAYS",
-        help="Display portfolio value history for the last N days"
-    )
-    parser.add_argument(
-        "--no-save",
-        action="store_true",
-        help="Skip saving portfolio snapshot to database"
-    )
-    parser.add_argument(
-        "--no-rebalancing",
-        action="store_true",
-        help="Skip rebalancing recommendations"
-    )
-    parser.add_argument(
-        "--dashboard",
-        action="store_true",
-        help="Start the web dashboard server"
-    )
-    
-    args = parser.parse_args()
-    
-    # If --dashboard is specified, start the dashboard server
-    if args.dashboard:
-        try:
-            from dashboard_api import app
-            print("=" * 80)
-            print("Starting Portfolio Dashboard...")
-            print("=" * 80)
-            print("Dashboard will be available at: http://localhost:5000")
-            print("Press Ctrl+C to stop the server")
-            print("=" * 80)
-            app.run(debug=False, host='127.0.0.1', port=5000)
-        except ImportError:
-            print("Error: Could not import dashboard_api module.")
-            print("Please ensure dashboard_api.py exists and Flask is installed.")
-            print("Install Flask with: pip install flask flask-cors")
-            sys.exit(1)
-        except Exception as e:
-            print(f"Error starting dashboard: {e}")
-            sys.exit(1)
-        sys.exit(0)
-    
-    # If --history is specified, show history and exit
-    if args.history:
-        print_portfolio_history(days=args.history)
-        sys.exit(0)
-    
-    # Otherwise, run normal evaluation
-    main(save_snapshot=not args.no_save, show_rebalancing=not args.no_rebalancing)
+# Note: Entry point moved to root portfolio_evaluator.py for better structure
