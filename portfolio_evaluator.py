@@ -1105,21 +1105,75 @@ class PortfolioEvaluator:
                     print("\n" + "-" * 80)
                     print("PERFORMANCE METRICS")
                     print("-" * 80)
+                    print("Returns:")
                     if 'daily' in returns:
-                        print(f"24h Return: {returns['daily']:+.2f}%")
+                        print(f"  24h Return: {returns['daily']:+.2f}%")
                     if 'weekly' in returns:
-                        print(f"7d Return: {returns['weekly']:+.2f}%")
+                        print(f"  7d Return: {returns['weekly']:+.2f}%")
                     if 'monthly' in returns:
-                        print(f"30d Return: {returns['monthly']:+.2f}%")
+                        print(f"  30d Return: {returns['monthly']:+.2f}%")
                     if 'ytd' in returns:
-                        print(f"YTD Return: {returns['ytd']:+.2f}%")
+                        print(f"  YTD Return: {returns['ytd']:+.2f}%")
                     if 'all_time' in returns:
-                        print(f"All-Time Return: {returns['all_time']:+.2f}%")
+                        print(f"  All-Time Return: {returns['all_time']:+.2f}%")
+                    
+                    # Advanced metrics
+                    print("\nRisk-Adjusted Metrics:")
+                    sharpe = db.calculate_sharpe_ratio(days=365)
+                    if sharpe is not None:
+                        sharpe_rating = "Excellent" if sharpe > 3 else "Very Good" if sharpe > 2 else "Good" if sharpe > 1 else "Below Average"
+                        print(f"  Sharpe Ratio: {sharpe:.2f} ({sharpe_rating})")
+                    
+                    sortino = db.calculate_sortino_ratio(days=365)
+                    if sortino is not None:
+                        if sortino < 999:
+                            sortino_rating = "Excellent" if sortino > 3 else "Very Good" if sortino > 2 else "Good" if sortino > 1 else "Below Average"
+                            print(f"  Sortino Ratio: {sortino:.2f} ({sortino_rating})")
+                        else:
+                            print(f"  Sortino Ratio: Perfect (no downside volatility)")
+                    
+                    # Maximum Drawdown
+                    drawdown = db.calculate_max_drawdown(days=365)
+                    if drawdown:
+                        print(f"\nMaximum Drawdown:")
+                        print(f"  Drawdown: {drawdown['max_drawdown_pct']:.2f}% (AU${drawdown['max_drawdown_value']:,.2f})")
+                        if drawdown['peak_date']:
+                            print(f"  Peak Date: {drawdown['peak_date'].strftime('%Y-%m-%d')}")
+                        if drawdown['trough_date']:
+                            print(f"  Trough Date: {drawdown['trough_date'].strftime('%Y-%m-%d')}")
+                        if drawdown['recovery_date']:
+                            print(f"  Recovery Date: {drawdown['recovery_date'].strftime('%Y-%m-%d')}")
+                            if drawdown['days_to_recover']:
+                                print(f"  Days to Recover: {drawdown['days_to_recover']}")
+                        elif drawdown['trough_date']:
+                            print(f"  Status: Not yet recovered")
+                    
+                    # Benchmark Comparison
+                    benchmark = db.calculate_benchmark_comparison(benchmark_symbol="BTC", days=365)
+                    if benchmark and 'error' not in benchmark:
+                        print(f"\nBenchmark Comparison (vs BTC):")
+                        if benchmark.get('portfolio_return') is not None:
+                            print(f"  Portfolio Return: {benchmark['portfolio_return']:+.2f}%")
+                        if benchmark.get('benchmark_return') is not None:
+                            print(f"  BTC Return: {benchmark['benchmark_return']:+.2f}%")
+                        if benchmark.get('excess_return') is not None:
+                            outperformance = benchmark['excess_return']
+                            status = "Outperforming" if outperformance > 0 else "Underperforming"
+                            print(f"  Excess Return: {outperformance:+.2f}% ({status})")
+                        if benchmark.get('beta') is not None:
+                            beta = benchmark['beta']
+                            beta_desc = "More volatile" if beta > 1 else "Less volatile" if beta < 1 else "Similar volatility"
+                            print(f"  Beta: {beta:.2f} ({beta_desc} than BTC)")
+                    elif benchmark and 'error' in benchmark:
+                        print(f"\nBenchmark Comparison: {benchmark['error']}")
+                    
                     snapshot_count = db.get_snapshot_count()
-                    print(f"Historical Snapshots: {snapshot_count}")
+                    print(f"\nHistorical Snapshots: {snapshot_count}")
                 db.close()
             except Exception as e:
                 print(f"\nNote: Could not load historical data: {e}")
+                import traceback
+                traceback.print_exc()
         
         # Get rebalancing actions for summary (calculate once, use multiple times)
         rebalancing_actions = []

@@ -5,6 +5,7 @@ Handles SQLite database operations for storing historical portfolio data
 
 import sqlite3
 import json
+import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
@@ -22,14 +23,21 @@ class PortfolioSnapshot:
 class PortfolioDatabase:
     """Manages SQLite database for portfolio historical data"""
     
-    def __init__(self, db_path: str = "portfolio_history.db"):
+    def __init__(self, db_path: str = None):
         """
         Initialize database connection and create tables if needed
         
         Args:
-            db_path: Path to SQLite database file
+            db_path: Path to SQLite database file (defaults to data/portfolio_history.db)
         """
-        self.db_path = db_path
+        if db_path is None:
+            # Default to data directory if it exists, otherwise root
+            if os.path.exists('data'):
+                self.db_path = os.path.join('data', 'portfolio_history.db')
+            else:
+                self.db_path = 'portfolio_history.db'
+        else:
+            self.db_path = db_path
         self.conn = None
         self._initialize_database()
     
