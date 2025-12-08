@@ -69,8 +69,10 @@ def get_historical_price_for_date(
             if response.status_code == 429:
                 if attempt < retry_count - 1:
                     wait_time = (attempt + 1) * 5
+                    print(f" (Rate limited, waiting {wait_time}s...)", end="", flush=True)
                     time.sleep(wait_time)
                     continue
+                print(f" (Rate limit exceeded)", end="", flush=True)
                 return None
             
             response.raise_for_status()
@@ -97,12 +99,21 @@ def get_historical_price_for_date(
             
             return None
             
+        except requests.exceptions.Timeout:
+            if attempt < retry_count - 1:
+                wait_time = (attempt + 1) * 3
+                print(f" (Timeout, retrying in {wait_time}s...)", end="", flush=True)
+                time.sleep(wait_time)
+                continue
+            print(f" (Timeout after {retry_count} attempts)", end="", flush=True)
+            return None
         except Exception as e:
             if attempt < retry_count - 1:
                 wait_time = (attempt + 1) * 3
+                print(f" (Error: {str(e)[:50]}, retrying...)", end="", flush=True)
                 time.sleep(wait_time)
                 continue
-            print(f"    Error fetching historical price for {symbol} on {date_str}: {e}")
+            print(f" (Error: {str(e)[:50]})", end="", flush=True)
             return None
     
     return None
@@ -151,11 +162,7 @@ def import_bitcoin_transactions(
         }
     
     if not transactions:
-        print("    No transactions found or error fetching transactions")
-        print("    This could mean:")
-        print("      - The address has no transaction history")
-        print("      - The API returned an error (check debug output above)")
-        print("      - The address format is incorrect")
+        # Silently return if no transactions (this is normal for many addresses)
         return {
             'total': 0,
             'imported': 0,
@@ -278,10 +285,12 @@ def import_ethereum_transactions(
     
     # Fetch transaction history
     print(f"Fetching transaction history (limit: {limit})...")
+    print(f"    This may take a moment if there are many transactions...")
     try:
         transactions = balance_fetcher.fetch_ethereum_transaction_history(address, limit=limit)
+        print(f"    ✓ Transaction fetch completed")
     except Exception as e:
-        print(f"    Exception while fetching transactions: {e}")
+        print(f"    ✗ Exception while fetching transactions: {e}")
         import traceback
         traceback.print_exc()
         return {
@@ -312,11 +321,13 @@ def import_ethereum_transactions(
     errors = 0
     
     # Process transactions (oldest first)
-    for tx in transactions:
+    for idx, tx in enumerate(transactions, 1):
         try:
             # Skip if transaction already exists
             if skip_existing and tx.get('tx_hash') and tracker.transaction_exists(tx['tx_hash']):
                 skipped += 1
+                if idx % 10 == 0:
+                    print(f"  [{idx}/{len(transactions)}] Skipped (already exists)")
                 continue
             
             # Skip if not enough confirmations
@@ -338,15 +349,18 @@ def import_ethereum_transactions(
                 continue
             
             # Get historical price for transaction date
-            print(f"  Processing transaction {tx['tx_hash'][:16]}... ({tx['timestamp'].strftime('%Y-%m-%d')})")
+            print(f"  [{idx}/{len(transactions)}] Processing {tx['tx_hash'][:16]}... ({tx['timestamp'].strftime('%Y-%m-%d')})")
             print(f"    Amount: {amount:.8f} {symbol}, Type: {'BUY' if is_incoming else 'SELL'}")
+            print(f"    Fetching historical price...", end="", flush=True)
             price = get_historical_price_for_date(symbol, tx['timestamp'])
             
             if not price:
+                print(f" FAILED")
                 print(f"    Warning: Could not fetch historical price for {symbol} on {tx['timestamp'].strftime('%Y-%m-%d')}")
                 print(f"    Skipping transaction (price data required for cost basis calculation)")
                 skipped += 1
                 continue
+            print(f" ${price:,.2f}")
             
             # Determine transaction type
             if is_incoming:
@@ -872,21 +886,39 @@ def import_from_wallet_config(
             num_addresses=50
         )
         
-        # Import from each address with balance
-        for address in addresses:
-            balance = balance_fetcher.fetch_bitcoin_balance_single(address, silent=True)
-            if balance and balance > 0:
-                result = import_bitcoin_transactions(
-                    address=address,
-                    tracker=tracker,
-                    balance_fetcher=balance_fetcher,
-                    symbol="BTC",
-                    limit=limit_per_address
-                )
+        # Quick check which addresses have transactions before fetching full history
+        print(f"    Checking {len(addresses)} addresses for transactions...")
+        addresses_with_txs = []
+        for idx, address in enumerate(addresses, 1):
+            if idx % 10 == 0 or idx == 1:
+                print(f"    [{idx}/{len(addresses)}] Checking addresses...", end="\r", flush=True)
+            
+            # Quick check if address has transactions
+            if balance_fetcher.has_bitcoin_transactions(address):
+                addresses_with_txs.append(address)
+        
+        print(f"    [{len(addresses)}/{len(addresses)}] Found {len(addresses_with_txs)} address(es) with transactions")
+        
+        # Only fetch full transaction history for addresses that have transactions
+        for idx, address in enumerate(addresses_with_txs, 1):
+            print(f"\n    [{idx}/{len(addresses_with_txs)}] Importing from {address[:20]}...")
+            result = import_bitcoin_transactions(
+                address=address,
+                tracker=tracker,
+                balance_fetcher=balance_fetcher,
+                symbol="BTC",
+                limit=limit_per_address
+            )
+            # Only store results if transactions were found/processed
+            if result.get('total', 0) > 0 or result.get('imported', 0) > 0:
                 results[f"BTC_{address[:10]}"] = result
     
     # Import from single BTC address if provided
     if "btc_address" in wallet_config and wallet_config["btc_address"]:
+        print("\n" + "=" * 80)
+        print("IMPORTING BITCOIN TRANSACTIONS FROM SINGLE ADDRESS")
+        print("=" * 80)
+        
         result = import_bitcoin_transactions(
             address=wallet_config["btc_address"],
             tracker=tracker,

@@ -199,51 +199,96 @@ class BlockchainBalanceFetcher:
         if not addresses:
             return None
         
-        print(f"    Checking balances for {len(addresses)} addresses (this may take a moment)...")
+        # First, quickly check which addresses have transactions
+        print(f"    Checking {len(addresses)} addresses for activity...")
+        addresses_with_txs = []
+        for idx, address in enumerate(addresses, 1):
+            if idx % 10 == 0 or idx == 1:
+                print(f"    [{idx}/{len(addresses)}] Checking addresses...", end="\r", flush=True)
+            
+            # Quick check if address has transactions
+            if self.has_bitcoin_transactions(address):
+                addresses_with_txs.append(address)
+        
+        print(f"    [{len(addresses)}/{len(addresses)}] Found {len(addresses_with_txs)} address(es) with transactions")
+        
+        if not addresses_with_txs:
+            print(f"    No balance found in first {len(addresses)} addresses")
+            return 0.0
+        
+        # Only fetch balances for addresses that have transactions
+        print(f"    Fetching balances for {len(addresses_with_txs)} address(es) with activity...")
         total_balance = 0.0
         addresses_with_balance = 0
-        consecutive_empty = 0
-        max_consecutive_empty = 10  # Stop early if we find 10 empty addresses in a row
         
-        # Check balances in batches to avoid overwhelming the API
-        batch_size = 5
-        for i in range(0, len(addresses), batch_size):
-            batch = addresses[i:i+batch_size]
-            batch_has_balance = False
+        for idx, address in enumerate(addresses_with_txs, 1):
+            if idx % 5 == 0 or idx == 1:
+                print(f"    [{idx}/{len(addresses_with_txs)}] Fetching balances...", end="\r", flush=True)
             
-            for address in batch:
-                balance = self.fetch_bitcoin_balance_single(address, silent=True)
-                if balance and balance > 0:
-                    total_balance += balance
-                    addresses_with_balance += 1
-                    consecutive_empty = 0
-                    batch_has_balance = True
-                else:
-                    consecutive_empty += 1
+            balance = self.fetch_bitcoin_balance_single(address, silent=True)
+            if balance and balance > 0:
+                total_balance += balance
+                addresses_with_balance += 1
             
-            # Show progress every 10 addresses
-            if (i + batch_size) % 10 == 0:
-                print(f"    Checked {min(i + batch_size, len(addresses))}/{len(addresses)} addresses...")
-            
-            # Stop early if we've found many consecutive empty addresses
-            if consecutive_empty >= max_consecutive_empty and addresses_with_balance > 0:
-                print(f"    Found {max_consecutive_empty} consecutive empty addresses, stopping early...")
-                break
-            
-            # Small delay between batches to be respectful to the API
-            if i + batch_size < len(addresses):
-                time.sleep(0.3)
+            # Small delay to be respectful to the API
+            if idx < len(addresses_with_txs):
+                time.sleep(0.2)
         
-        if addresses_with_balance > 0:
-            print(f"    Found balance in {addresses_with_balance} address(es): {total_balance:.8f} BTC")
-        else:
-            print(f"    No balance found in first {len(addresses)} addresses")
+        print(f"    [{len(addresses_with_txs)}/{len(addresses_with_txs)}] Found balance in {addresses_with_balance} address(es): {total_balance:.8f} BTC")
         
         return total_balance if total_balance > 0 else 0.0
     
     def fetch_bitcoin_balance_single(self, address: str, silent: bool = False, retry_count: int = 3) -> Optional[float]:
         """Fetch Bitcoin balance from a single address (internal helper with retry logic)"""
-        # Try multiple APIs with retry logic
+        # Try Blockstream API first (more reliable, no API key needed, same as transaction checking)
+        for attempt in range(retry_count):
+            try:
+                url = f"https://blockstream.info/api/address/{address}"
+                response = requests.get(url, timeout=10)
+                
+                if response.status_code == 429:
+                    if attempt < retry_count - 1:
+                        wait_time = (attempt + 1) * 2
+                        if not silent:
+                            print(f"    Rate limit on Blockstream, waiting {wait_time}s before retry...")
+                        time.sleep(wait_time)
+                        continue
+                    break
+                
+                response.raise_for_status()
+                data = response.json()
+                
+                # Blockstream returns balance in chain_stats and mempool_stats
+                chain_balance = data.get("chain_stats", {}).get("funded_txo_sum", 0) - data.get("chain_stats", {}).get("spent_txo_sum", 0)
+                mempool_balance = data.get("mempool_stats", {}).get("funded_txo_sum", 0) - data.get("mempool_stats", {}).get("spent_txo_sum", 0)
+                total_balance_satoshi = chain_balance + mempool_balance
+                btc_balance = total_balance_satoshi / 100000000.0
+                
+                if not silent:
+                    if btc_balance > 0:
+                        print(f"    Found balance: {btc_balance:.8f} BTC")
+                    else:
+                        print(f"    Address balance: {btc_balance:.8f} BTC")
+                return btc_balance
+                
+            except requests.exceptions.RequestException as e:
+                if attempt < retry_count - 1:
+                    wait_time = (attempt + 1) * 2
+                    if not silent:
+                        print(f"    Error on Blockstream: {e}, retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                break
+            except Exception as e:
+                if attempt < retry_count - 1:
+                    wait_time = (attempt + 1) * 2
+                    if not silent:
+                        print(f"    Error on Blockstream: {e}, retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                break
+        
+        # Fallback to BlockCypher (original method)
         for attempt in range(retry_count):
             # Try BlockCypher first (usually more reliable for bech32 addresses)
             try:
@@ -1145,6 +1190,50 @@ class BlockchainBalanceFetcher:
         print(f"\nSuccessfully fetched {len(balances)} asset balances\n")
         return balances
     
+    def has_bitcoin_transactions(self, address: str, retry_count: int = 2) -> bool:
+        """
+        Quick check if a Bitcoin address has any transactions
+        Uses Blockstream API address info endpoint (lighter than fetching all transactions)
+        
+        Args:
+            address: Bitcoin address
+            retry_count: Number of retry attempts
+            
+        Returns:
+            True if address has transactions, False otherwise
+        """
+        for attempt in range(retry_count):
+            try:
+                # Blockstream API: Get address info (lightweight check)
+                url = f"https://blockstream.info/api/address/{address}"
+                response = requests.get(url, timeout=10)
+                
+                if response.status_code == 429:
+                    if attempt < retry_count - 1:
+                        time.sleep(2)
+                        continue
+                    return False
+                
+                response.raise_for_status()
+                data = response.json()
+                
+                # Check if address has any transactions
+                tx_count = data.get("chain_stats", {}).get("tx_count", 0)
+                mempool_tx_count = data.get("mempool_stats", {}).get("tx_count", 0)
+                total_tx_count = tx_count + mempool_tx_count
+                
+                return total_tx_count > 0
+                
+            except requests.exceptions.RequestException:
+                if attempt < retry_count - 1:
+                    time.sleep(1)
+                    continue
+                return False
+            except Exception:
+                return False
+        
+        return False
+    
     def fetch_bitcoin_transaction_history(
         self,
         address: str,
@@ -1153,6 +1242,7 @@ class BlockchainBalanceFetcher:
     ) -> List[Dict]:
         """
         Fetch Bitcoin transaction history from an address
+        Uses Blockstream API (primary) and BlockCypher API (fallback)
         
         Args:
             address: Bitcoin address
@@ -1169,6 +1259,133 @@ class BlockchainBalanceFetcher:
         """
         transactions = []
         
+        # Try Blockstream API first (more reliable, no API key needed)
+        print(f"    Attempting to fetch BTC transactions using Blockstream API...")
+        for attempt in range(retry_count):
+            try:
+                # Blockstream API: Get list of transaction IDs for the address
+                url = f"https://blockstream.info/api/address/{address}/txs"
+                params = {}
+                
+                response = requests.get(url, params=params, timeout=15)
+                
+                if response.status_code == 429:
+                    if attempt < retry_count - 1:
+                        wait_time = (attempt + 1) * 3
+                        print(f"    Rate limit hit, waiting {wait_time}s...")
+                        time.sleep(wait_time)
+                        continue
+                    break
+                
+                response.raise_for_status()
+                tx_list = response.json()
+                
+                if not isinstance(tx_list, list):
+                    print(f"    Warning: Blockstream API returned unexpected format")
+                    break
+                
+                print(f"    Found {len(tx_list)} transactions from Blockstream API")
+                
+                # Limit the number of transactions to process
+                tx_list = tx_list[:limit]
+                
+                # Process transactions from the list (Blockstream API returns full tx objects)
+                for tx in tx_list:
+                    try:
+                        txid = tx.get("txid", "")
+                        if not txid:
+                            continue
+                        
+                        # Parse timestamp
+                        timestamp = None
+                        status = tx.get("status", {})
+                        if status:
+                            block_time = status.get("block_time")
+                            if block_time:
+                                timestamp = datetime.fromtimestamp(block_time)
+                        
+                        # Calculate net amount for this address
+                        total_input = 0
+                        total_output = 0
+                        
+                        # Check inputs (where BTC came from - address spent BTC)
+                        for vin in tx.get("vin", []):
+                            prevout = vin.get("prevout")
+                            if prevout:
+                                # prevout.scriptpubkey_address is a string, not a list
+                                scriptpubkey_address = prevout.get("scriptpubkey_address")
+                                if scriptpubkey_address == address:
+                                    total_input += prevout.get("value", 0) / 100000000.0
+                        
+                        # Check outputs (where BTC went to - address received BTC)
+                        for vout in tx.get("vout", []):
+                            scriptpubkey_address = vout.get("scriptpubkey_address")
+                            if scriptpubkey_address == address:
+                                total_output += vout.get("value", 0) / 100000000.0
+                        
+                        # Net amount: positive if received, negative if sent
+                        net_amount = total_output - total_input
+                        
+                        # Get fee (in satoshis, convert to BTC)
+                        fee_btc = tx.get("fee", 0) / 100000000.0
+                        
+                        # Get confirmations
+                        if status and status.get("confirmed"):
+                            # If confirmed, calculate confirmations from block height
+                            block_height = status.get("block_height")
+                            if block_height:
+                                # Get current block height to calculate confirmations (cache this)
+                                try:
+                                    if not hasattr(self, '_current_block_height'):
+                                        tip_url = "https://blockstream.info/api/blocks/tip/height"
+                                        tip_response = requests.get(tip_url, timeout=10)
+                                        self._current_block_height = int(tip_response.text)
+                                    confirmations = self._current_block_height - block_height + 1
+                                except:
+                                    confirmations = 1  # At least 1 if confirmed
+                            else:
+                                confirmations = 0
+                        else:
+                            confirmations = 0
+                        
+                        if net_amount != 0:  # Only include transactions that affected this address
+                            transactions.append({
+                                'tx_hash': txid,
+                                'timestamp': timestamp,
+                                'amount': net_amount,
+                                'fee': fee_btc,
+                                'confirmations': confirmations,
+                                'address': address
+                            })
+                        
+                        # Small delay to avoid rate limits
+                        time.sleep(0.1)
+                        
+                    except Exception as e:
+                        txid_str = tx.get("txid", "unknown")[:16] if isinstance(tx, dict) else "unknown"
+                        print(f"    Warning: Error processing transaction {txid_str}...: {e}")
+                        continue
+                
+                if transactions:
+                    # Sort by timestamp (oldest first)
+                    transactions.sort(key=lambda x: x['timestamp'] if x['timestamp'] else datetime.min)
+                    print(f"    Successfully fetched {len(transactions)} BTC transactions from Blockstream")
+                    return transactions
+                
+            except requests.exceptions.RequestException as e:
+                if attempt < retry_count - 1:
+                    wait_time = (attempt + 1) * 3
+                    print(f"    Blockstream API error: {e}, retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                print(f"    Blockstream API failed: {e}")
+                break
+            except Exception as e:
+                print(f"    Unexpected error with Blockstream API: {e}")
+                break
+        
+        # Fallback to BlockCypher API if Blockstream fails
+        print(f"    Falling back to BlockCypher API...")
         for attempt in range(retry_count):
             try:
                 # Use BlockCypher's full address endpoint
@@ -1188,23 +1405,14 @@ class BlockchainBalanceFetcher:
                 response.raise_for_status()
                 data = response.json()
                 
-                # Debug: Check API response structure
-                print(f"    Debug: BlockCypher API status: {response.status_code}")
-                print(f"    Debug: Response keys: {list(data.keys())}")
-                
                 if "txs" not in data:
                     print(f"    Warning: No 'txs' key in BlockCypher response")
-                    print(f"    Available keys: {list(data.keys())}")
                     if "error" in data:
                         print(f"    Error message: {data.get('error')}")
                     return []
                 
                 txs = data.get("txs", [])
-                print(f"    Debug: Found {len(txs)} transactions in API response")
-                
-                if len(txs) > 0:
-                    print(f"    Debug: First transaction keys: {list(txs[0].keys())}")
-                    print(f"    Debug: First transaction hash: {txs[0].get('hash', 'N/A')}")
+                print(f"    Found {len(txs)} transactions from BlockCypher API")
                 
                 # Process transactions
                 for tx in txs:
@@ -1215,13 +1423,11 @@ class BlockchainBalanceFetcher:
                     timestamp = None
                     if tx_time:
                         try:
-                            from datetime import datetime
                             timestamp = datetime.strptime(tx_time, "%Y-%m-%dT%H:%M:%SZ")
                         except:
                             pass
                     
                     # Calculate net amount for this address
-                    # Sum all inputs and outputs involving this address
                     total_input = 0
                     total_output = 0
                     
@@ -1258,6 +1464,7 @@ class BlockchainBalanceFetcher:
                 
                 # Sort by timestamp (oldest first)
                 transactions.sort(key=lambda x: x['timestamp'] if x['timestamp'] else datetime.min)
+                print(f"    Successfully fetched {len(transactions)} BTC transactions from BlockCypher")
                 return transactions
                 
             except requests.exceptions.RequestException as e:
