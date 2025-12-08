@@ -17,6 +17,14 @@ try:
 except ImportError:
     BIP32_AVAILABLE = False
 
+# Try pycoin as alternative (for zpub and unsupported xpub formats)
+try:
+    from pycoin.symbols.btc import network as btc_network
+    from pycoin.key.BIP32Node import BIP32Node
+    PYCOIN_AVAILABLE = True
+except ImportError:
+    PYCOIN_AVAILABLE = False
+
 
 class BlockchainBalanceFetcher:
     """Fetches balances from various blockchain networks"""
@@ -34,7 +42,7 @@ class BlockchainBalanceFetcher:
         
     def derive_bitcoin_addresses_from_xpub(self, xpub: str, num_addresses: int = 50) -> List[str]:
         """
-        Derive Bitcoin addresses from an extended public key (xpub)
+        Derive Bitcoin addresses from an extended public key (xpub, ypub, or zpub)
         
         Args:
             xpub: Extended public key (xpub, ypub, or zpub)
@@ -43,41 +51,137 @@ class BlockchainBalanceFetcher:
         Returns:
             List of Bitcoin addresses
         """
-        if not BIP32_AVAILABLE:
-            print("    Error: bip32utils library not installed. Install with: pip install bip32utils base58")
-            return []
-        
         addresses = []
-        try:
-            # Validate xpub format (basic check - will be validated by BIP32Key)
-            if len(xpub) < 100 or len(xpub) > 120:
-                print(f"    Warning: xpub length seems unusual ({len(xpub)} chars), but attempting to use it...")
-            
-            # Create BIP32 key from xpub once
+        xpub_clean = xpub.strip()
+        
+        # Detect key type
+        key_type = "unknown"
+        if xpub_clean.startswith("xpub"):
+            key_type = "xpub (Legacy)"
+        elif xpub_clean.startswith("ypub"):
+            key_type = "ypub (SegWit wrapped)"
+        elif xpub_clean.startswith("zpub"):
+            key_type = "zpub (Native SegWit)"
+        
+        print(f"    Deriving addresses from {key_type}...")
+        
+        # Try bip32utils first
+        if BIP32_AVAILABLE:
             try:
-                key = BIP32Key.fromExtendedKey(xpub)
+                key = BIP32Key.fromExtendedKey(xpub_clean)
+                print(f"    Successfully parsed with bip32utils")
+                
+                for i in range(num_addresses):
+                    try:
+                        child_key = key.ChildKey(i)
+                        addr = child_key.Address()
+                        if addr:
+                            addresses.append(addr)
+                            if i < 3:  # Debug first few
+                                print(f"      Address {i}: {addr}")
+                    except Exception as e:
+                        if i < 3:
+                            print(f"      Error deriving address {i}: {e}")
+                        continue
+                
+                if addresses:
+                    print(f"    Derived {len(addresses)} addresses using bip32utils")
+                    return addresses
             except Exception as e:
-                print(f"    Error creating BIP32 key: {e}")
-                return []
-            
-            # Derive addresses from the external chain (change=0, m/0/i)
-            for i in range(num_addresses):
+                error_msg = str(e)
+                if "unknown extended key version" in error_msg.lower() or "checksum" in error_msg.lower():
+                    print(f"    bip32utils doesn't support this key format: {error_msg}")
+                    print(f"    Trying alternative library (pycoin)...")
+                else:
+                    print(f"    bip32utils failed: {error_msg}")
+                    if not PYCOIN_AVAILABLE:
+                        return []
+        
+        # Try pycoin as fallback
+        if PYCOIN_AVAILABLE:
+            try:
+                print(f"    Attempting to use pycoin library...")
+                
+                key_obj = None
+                
+                # Method 1: Try using network.parse() directly (works for xpub/ypub/zpub)
                 try:
-                    # Derive child key at index i (external chain, change=0)
-                    child_key = key.ChildKey(i)
-                    # Get address (bip32utils handles address format based on xpub type)
-                    addr = child_key.Address()
-                    if addr:
-                        addresses.append(addr)
-                except Exception as e:
-                    # If derivation fails, continue to next address
-                    continue
-            
-            return addresses
-            
-        except Exception as e:
-            print(f"    Error deriving addresses from xpub: {e}")
-            return []
+                    key_obj = btc_network.parse(xpub_clean)
+                    if key_obj:
+                        print(f"    pycoin: Successfully parsed using network.parse()")
+                except Exception as e1:
+                    # Method 2: Try using network.parse.bip32_pub
+                    try:
+                        key_obj = btc_network.parse.bip32_pub(xpub_clean)
+                        if key_obj:
+                            print(f"    pycoin: Successfully parsed using network.parse.bip32_pub")
+                    except Exception as e2:
+                        # Method 3: Try deserializing from base58
+                        try:
+                            import base58
+                            decoded = base58.b58decode(xpub_clean)
+                            key_obj = BIP32Node.deserialize(decoded)
+                            if key_obj:
+                                print(f"    pycoin: Successfully parsed using BIP32Node.deserialize")
+                        except Exception as e3:
+                            print(f"    pycoin: Parsing methods failed")
+                            print(f"      network.parse(): {e1}")
+                            print(f"      network.parse.bip32_pub: {e2}")
+                            print(f"      deserialize: {e3}")
+                
+                if key_obj:
+                    print(f"    Deriving {num_addresses} addresses...")
+                    for i in range(num_addresses):
+                        try:
+                            # Try different path formats
+                            subkey = None
+                            try:
+                                subkey = key_obj.subkey_for_path(f"0/{i}")
+                            except:
+                                try:
+                                    subkey = key_obj.subkey_for_path(f"m/0/{i}")
+                                except:
+                                    try:
+                                        # Try with hardened derivation
+                                        subkey = key_obj.subkey(0).subkey(i)
+                                    except:
+                                        pass
+                            
+                            if subkey:
+                                addr = subkey.address()
+                                if addr:
+                                    addresses.append(addr)
+                                    if i < 5:  # Debug first few
+                                        print(f"      Address {i}: {addr}")
+                        except Exception as e:
+                            if i < 3:
+                                print(f"      Error deriving address {i}: {e}")
+                            continue
+                    
+                    if addresses:
+                        print(f"    Successfully derived {len(addresses)} addresses using pycoin")
+                        return addresses
+                    else:
+                        print(f"    pycoin parsed the key but couldn't derive any addresses")
+                else:
+                    print(f"    pycoin couldn't parse the extended key")
+                    
+            except ImportError:
+                print(f"    pycoin not available. Install with: pip install pycoin")
+            except Exception as e:
+                print(f"    pycoin failed: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            if not BIP32_AVAILABLE:
+                print(f"    Error: Neither bip32utils nor pycoin are available.")
+                print(f"    Install one with: pip install bip32utils base58")
+                print(f"    Or: pip install pycoin")
+    
+        print(f"    Error: Could not derive addresses from {key_type}")
+        print(f"    The key format may not be supported, or the derivation path may be incorrect")
+        print(f"    Try using a different key format (xpub/ypub/zpub) or check your wallet's derivation path")
+        return []
     
     def fetch_bitcoin_balance_from_xpub(self, xpub: str) -> Optional[float]:
         """
@@ -162,8 +266,12 @@ class BlockchainBalanceFetcher:
                 data = response.json()
                 balance_satoshi = data.get("balance", 0)
                 btc_balance = balance_satoshi / 100000000.0
-                if not silent and btc_balance > 0:
-                    print(f"    Found balance: {btc_balance:.8f} BTC")
+                # Accept 0 as valid (not an error)
+                if not silent:
+                    if btc_balance > 0:
+                        print(f"    Found balance: {btc_balance:.8f} BTC")
+                    else:
+                        print(f"    Address balance: {btc_balance:.8f} BTC")
                 return btc_balance
             except requests.exceptions.RequestException as e:
                 if attempt < retry_count - 1:
@@ -195,8 +303,12 @@ class BlockchainBalanceFetcher:
                 response.raise_for_status()
                 satoshis = int(response.text)
                 btc_balance = satoshis / 100000000.0
-                if not silent and btc_balance > 0:
-                    print(f"    Found balance: {btc_balance:.8f} BTC")
+                # Accept 0 as valid (not an error)
+                if not silent:
+                    if btc_balance > 0:
+                        print(f"    Found balance: {btc_balance:.8f} BTC")
+                    else:
+                        print(f"    Address balance: {btc_balance:.8f} BTC")
                 return btc_balance
             except Exception as e:
                 if attempt < retry_count - 1:
@@ -938,33 +1050,36 @@ class BlockchainBalanceFetcher:
         
         print("Fetching balances from blockchain...")
         
-        # Bitcoin - check config first, then try to fetch, then prompt if needed
-        if "btc_balance" in wallet_config and wallet_config["btc_balance"] is not None:
-            # Use balance from config (for non-interactive use like API)
+        # Bitcoin - prioritize blockchain fetching over config
+        btc_balance = None
+        
+        # First, try to fetch from blockchain (address or xpub)
+        if "btc_address" in wallet_config and wallet_config["btc_address"]:
+            print("  Fetching Bitcoin balance from address...")
+            btc_balance = self.fetch_bitcoin_balance(
+                address=wallet_config["btc_address"],
+                xpub=wallet_config.get("btc_xpub")
+            )
+        elif "btc_xpub" in wallet_config and wallet_config["btc_xpub"]:
+            print("  Fetching Bitcoin balance from xpub...")
+            btc_balance = self.fetch_bitcoin_balance(xpub=wallet_config["btc_xpub"])
+        
+        # If blockchain fetch succeeded, use it (even if 0)
+        if btc_balance is not None:
+            balances["BTC"] = btc_balance
+            if btc_balance > 0:
+                print(f"    BTC: {btc_balance:.8f} (from blockchain)")
+            else:
+                print(f"    BTC: {btc_balance:.8f} (from blockchain - no balance)")
+        # Fallback to config only if blockchain fetch failed
+        elif "btc_balance" in wallet_config and wallet_config["btc_balance"] is not None:
             try:
                 btc_balance = float(wallet_config["btc_balance"])
                 if btc_balance > 0:
                     balances["BTC"] = btc_balance
-                    print(f"    BTC: {btc_balance:.8f} (from config)")
+                    print(f"    BTC: {btc_balance:.8f} (from config - blockchain fetch failed)")
             except (ValueError, TypeError):
-                print("    Invalid btc_balance in config, trying other methods...")
-        
-        # If no balance from config, try to fetch from address/xpub
-        if "BTC" not in balances:
-            btc_balance = None
-            if "btc_address" in wallet_config and wallet_config["btc_address"]:
-                print("  Fetching Bitcoin balance from address...")
-                btc_balance = self.fetch_bitcoin_balance(
-                    address=wallet_config["btc_address"],
-                    xpub=wallet_config.get("btc_xpub")
-                )
-            elif "btc_xpub" in wallet_config and wallet_config["btc_xpub"]:
-                print("  Fetching Bitcoin balance from xpub...")
-                btc_balance = self.fetch_bitcoin_balance(xpub=wallet_config["btc_xpub"])
-            
-            if btc_balance is not None and btc_balance > 0:
-                balances["BTC"] = btc_balance
-                print(f"    BTC: {btc_balance:.8f}")
+                print("    Invalid btc_balance in config")
         
         # If still no balance and prompting is enabled, ask user
         if "BTC" not in balances and prompt_for_btc:
