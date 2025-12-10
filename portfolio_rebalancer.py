@@ -81,7 +81,8 @@ class PortfolioRebalancer:
         self, 
         portfolio: Dict[str, Asset],
         rebalance_threshold: float = REBALANCE_THRESHOLD,
-        market_data: Optional[Dict] = None
+        market_data: Optional[Dict] = None,
+        risk_adjusted_limits: Optional[Dict[str, float]] = None
     ) -> List[RebalancingAction]:
         """
         Calculate rebalancing actions needed to reach target allocations
@@ -90,10 +91,22 @@ class PortfolioRebalancer:
             portfolio: Dictionary mapping asset symbols to Asset objects
             rebalance_threshold: Minimum allocation difference (%) to trigger rebalancing
             market_data: Optional market data dictionary with prices for assets not in portfolio
+            risk_adjusted_limits: Optional dict of risk-adjusted max allocations per asset
             
         Returns:
             List of RebalancingAction objects, sorted by absolute allocation difference
         """
+        # Apply risk-adjusted limits if provided
+        # Create a working copy of target allocations
+        working_targets = self.target_allocations.copy()
+        
+        if risk_adjusted_limits:
+            for symbol, max_allocation in risk_adjusted_limits.items():
+                if symbol in working_targets:
+                    # Cap target allocation at risk-adjusted limit
+                    if working_targets[symbol] > max_allocation:
+                        working_targets[symbol] = max_allocation
+        
         # Calculate total portfolio value
         total_value = sum(asset.value for asset in portfolio.values())
         
@@ -102,8 +115,8 @@ class PortfolioRebalancer:
         
         actions = []
         
-        # Process each asset in target allocations
-        for symbol, target_pct in self.target_allocations.items():
+        # Process each asset in target allocations (using working_targets)
+        for symbol, target_pct in working_targets.items():
             if symbol in portfolio:
                 asset = portfolio[symbol]
                 current_pct = asset.allocation_percent

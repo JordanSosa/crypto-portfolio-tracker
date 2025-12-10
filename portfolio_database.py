@@ -42,6 +42,9 @@ class PortfolioDatabase:
         
         cursor = self.conn.cursor()
         
+        # Optimize SQLite performance
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute("PRAGMA synchronous=NORMAL;")        
         # Table for portfolio snapshots (daily/weekly summaries)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS portfolio_snapshots (
@@ -134,6 +137,47 @@ class PortfolioDatabase:
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_historical_prices_symbol 
             ON historical_prices(symbol)
+        """)
+        
+        # Table for risk metrics
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS risk_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                date TEXT NOT NULL,
+                volatility_annualized REAL,
+                atr REAL,
+                risk_score REAL,
+                max_allocation_pct REAL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(symbol, date)
+            )
+        """)
+        
+        # Table for correlation data
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS asset_correlations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol1 TEXT NOT NULL,
+                symbol2 TEXT NOT NULL,
+                date TEXT NOT NULL,
+                correlation_30d REAL,
+                correlation_90d REAL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(symbol1, symbol2, date)
+            )
+        """)
+        
+        # Indexes for risk metrics
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_risk_metrics_symbol_date 
+            ON risk_metrics(symbol, date)
+        """)
+        
+        # Indexes for correlations
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_correlations_symbols_date 
+            ON asset_correlations(symbol1, symbol2, date)
         """)
         
         self.conn.commit()

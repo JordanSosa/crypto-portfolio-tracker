@@ -269,6 +269,156 @@ class TechnicalIndicators:
             return 'below_lower'
     
     @staticmethod
+    def calculate_atr(
+        prices: List[float], 
+        period: int = 14,
+        high_prices: Optional[List[float]] = None,
+        low_prices: Optional[List[float]] = None
+    ) -> Optional[float]:
+        """
+        Calculate Average True Range (ATR) for volatility measurement
+        
+        For long-term strategy: ATR helps determine position sizing and stop-loss levels
+        
+        Args:
+            prices: List of closing prices (most recent last)
+            period: ATR period (default 14)
+            high_prices: Optional list of high prices (if available)
+            low_prices: Optional list of low prices (if available)
+            
+        Returns:
+            ATR value or None if insufficient data
+        """
+        if len(prices) < period + 1:
+            return None
+        
+        # If we only have closing prices, use price changes as proxy
+        # True ATR uses high-low ranges, but this approximation works for daily data
+        true_ranges = []
+        
+        if high_prices and low_prices and len(high_prices) == len(prices) and len(low_prices) == len(prices):
+            # Calculate true range with high/low data
+            for i in range(1, len(prices)):
+                tr1 = high_prices[i] - low_prices[i]  # Current high - low
+                tr2 = abs(high_prices[i] - prices[i-1])  # Current high - previous close
+                tr3 = abs(low_prices[i] - prices[i-1])   # Current low - previous close
+                true_ranges.append(max(tr1, tr2, tr3))
+        else:
+            # Approximation using closing prices only
+            for i in range(1, len(prices)):
+                true_range = abs(prices[i] - prices[i-1])
+                true_ranges.append(true_range)
+        
+        if len(true_ranges) < period:
+            return None
+        
+        # Calculate ATR as SMA of true ranges
+        recent_ranges = true_ranges[-period:]
+        atr = sum(recent_ranges) / period
+        
+        return atr
+    
+    @staticmethod
+    def calculate_correlation(
+        prices1: List[float],
+        prices2: List[float],
+        period: Optional[int] = None
+    ) -> Optional[float]:
+        """
+        Calculate correlation coefficient between two price series
+        
+        For long-term strategy: Identifies assets that move together (diversification risk)
+        
+        Args:
+            prices1: First price series (most recent last)
+            prices2: Second price series (most recent last, same length as prices1)
+            period: Optional period for rolling correlation (None = use all data)
+            
+        Returns:
+            Correlation coefficient (-1 to 1) or None if insufficient data
+        """
+        if len(prices1) != len(prices2):
+            return None
+        
+        # Use specified period or all available data
+        if period:
+            if len(prices1) < period:
+                return None
+            prices1 = prices1[-period:]
+            prices2 = prices2[-period:]
+        
+        if len(prices1) < 2:
+            return None
+        
+        # Calculate returns (percentage changes)
+        returns1 = [(prices1[i] - prices1[i-1]) / prices1[i-1] 
+                    for i in range(1, len(prices1))]
+        returns2 = [(prices2[i] - prices2[i-1]) / prices2[i-1] 
+                    for i in range(1, len(prices2))]
+        
+        # Calculate means
+        mean1 = sum(returns1) / len(returns1)
+        mean2 = sum(returns2) / len(returns2)
+        
+        # Calculate covariance and standard deviations
+        covariance = sum((returns1[i] - mean1) * (returns2[i] - mean2) 
+                         for i in range(len(returns1))) / len(returns1)
+        
+        variance1 = sum((r - mean1) ** 2 for r in returns1) / len(returns1)
+        variance2 = sum((r - mean2) ** 2 for r in returns2) / len(returns2)
+        
+        std1 = variance1 ** 0.5
+        std2 = variance2 ** 0.5
+        
+        if std1 == 0 or std2 == 0:
+            return None
+        
+        correlation = covariance / (std1 * std2)
+        return correlation
+    
+    @staticmethod
+    def calculate_volatility_annualized(
+        prices: List[float],
+        period: int = 30
+    ) -> Optional[float]:
+        """
+        Calculate annualized volatility from price series
+        
+        For long-term strategy: Used for risk-adjusted position sizing
+        
+        Args:
+            prices: List of prices (most recent last)
+            period: Number of days to use for calculation
+            
+        Returns:
+            Annualized volatility as percentage (e.g., 30.0 for 30%)
+        """
+        if len(prices) < period + 1:
+            return None
+        
+        recent_prices = prices[-period-1:]
+        
+        # Calculate daily returns
+        returns = []
+        for i in range(1, len(recent_prices)):
+            if recent_prices[i-1] > 0:
+                daily_return = (recent_prices[i] - recent_prices[i-1]) / recent_prices[i-1]
+                returns.append(daily_return)
+        
+        if len(returns) < 2:
+            return None
+        
+        # Calculate standard deviation of daily returns
+        mean_return = sum(returns) / len(returns)
+        variance = sum((r - mean_return) ** 2 for r in returns) / len(returns)
+        std_dev = variance ** 0.5
+        
+        # Annualize (assuming 365 trading days)
+        annualized_volatility = std_dev * (365 ** 0.5) * 100
+        
+        return annualized_volatility
+    
+    @staticmethod
     def fetch_historical_prices_from_coingecko(
         symbol: str, 
         days: int = 30

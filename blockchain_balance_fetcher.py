@@ -9,6 +9,7 @@ import time
 from typing import Dict, Optional, List
 from decimal import Decimal
 from datetime import datetime
+import concurrent.futures
 
 try:
     from bip32utils import BIP32Key
@@ -199,17 +200,55 @@ class BlockchainBalanceFetcher:
         if not addresses:
             return None
         
-        # First, quickly check which addresses have transactions
-        print(f"    Checking {len(addresses)} addresses for activity...")
+        # Parallel processing for checking transactions
+        # This significantly speeds up the process compared to sequential checking
+        print(f"    Checking {len(addresses)} addresses for activity (parallel)...")
         addresses_with_txs = []
-        for idx, address in enumerate(addresses, 1):
-            if idx % 10 == 0 or idx == 1:
-                print(f"    [{idx}/{len(addresses)}] Checking addresses...", end="\r", flush=True)
-            
-            # Quick check if address has transactions
-            if self.has_bitcoin_transactions(address):
-                addresses_with_txs.append(address)
         
+        # Use a max of 5 workers to avoid hitting rate limits too hard
+        # We process in order to apply gap limit logic if needed
+        MAX_WORKERS = 5
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            # Create a dictionary to map futures to addresses (to keep order)
+            future_to_address = {executor.submit(self.has_bitcoin_transactions, addr): addr for addr in addresses}
+            
+            # Process as they complete, but we want to maintain order for gap limit
+            # So we map addresses to their results
+            results = {}
+            for future in concurrent.futures.as_completed(future_to_address):
+                addr = future_to_address[future]
+                try:
+                    has_tx = future.result()
+                    results[addr] = has_tx
+                except Exception as e:
+                    print(f"    Error checking address {addr}: {e}")
+                    results[addr] = False
+            
+            # Reconstruct ordered list and apply gap limit logic
+            # Standard BIP-44 gap limit is 20
+            GAP_LIMIT = 20
+            consecutive_unused = 0
+            
+            for i, addr in enumerate(addresses):
+                has_tx = results.get(addr, False)
+                if has_tx:
+                    addresses_with_txs.append(addr)
+                    consecutive_unused = 0
+                else:
+                    consecutive_unused += 1
+                
+                # Update progress roughly
+                if i % 10 == 0 or i == len(addresses) - 1:
+                    print(f"    Checked {i+1}/{len(addresses)} addresses...", end="\r", flush=True)
+                
+                # If we hit gap limit, we could technically stop if we were generating addresses on the fly
+                # Since we pre-generated 50, we just note it. If we were fetching more, we'd stop here.
+                if consecutive_unused >= GAP_LIMIT:
+                    # Optional: stop checking further if we really wanted to save resources
+                    # But since we already submitted all tasks, they are running anyway.
+                    pass
+
         print(f"    [{len(addresses)}/{len(addresses)}] Found {len(addresses_with_txs)} address(es) with transactions")
         
         if not addresses_with_txs:
@@ -221,20 +260,26 @@ class BlockchainBalanceFetcher:
         total_balance = 0.0
         addresses_with_balance = 0
         
-        for idx, address in enumerate(addresses_with_txs, 1):
-            if idx % 5 == 0 or idx == 1:
-                print(f"    [{idx}/{len(addresses_with_txs)}] Fetching balances...", end="\r", flush=True)
+        # Parallel fetch for balances too
+        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            future_to_addr = {
+                executor.submit(self.fetch_bitcoin_balance_single, addr, silent=True): addr 
+                for addr in addresses_with_txs
+            }
             
-            balance = self.fetch_bitcoin_balance_single(address, silent=True)
-            if balance and balance > 0:
-                total_balance += balance
-                addresses_with_balance += 1
-            
-            # Small delay to be respectful to the API
-            if idx < len(addresses_with_txs):
-                time.sleep(0.2)
-        
-        print(f"    [{len(addresses_with_txs)}/{len(addresses_with_txs)}] Found balance in {addresses_with_balance} address(es): {total_balance:.8f} BTC")
+            for i, future in enumerate(concurrent.futures.as_completed(future_to_addr)):
+                addr = future_to_addr[future]
+                try:
+                    balance = future.result()
+                    if balance and balance > 0:
+                        total_balance += balance
+                        addresses_with_balance += 1
+                except Exception as e:
+                    print(f"    Error fetching balance for {addr}: {e}")
+                
+                print(f"    Fetched {i+1}/{len(addresses_with_txs)} balances...", end="\r", flush=True)
+
+        print(f"    Found balance in {addresses_with_balance} address(es): {total_balance:.8f} BTC")
         
         return total_balance if total_balance > 0 else 0.0
     
@@ -1093,43 +1138,114 @@ class BlockchainBalanceFetcher:
         """
         balances = {}
         
-        print("Fetching balances from blockchain...")
+        print("Fetching balances from blockchain (parallel execution)...")
         
-        # Bitcoin - prioritize blockchain fetching over config
-        btc_balance = None
-        
-        # First, try to fetch from blockchain (address or xpub)
-        if "btc_address" in wallet_config and wallet_config["btc_address"]:
-            print("  Fetching Bitcoin balance from address...")
-            btc_balance = self.fetch_bitcoin_balance(
-                address=wallet_config["btc_address"],
-                xpub=wallet_config.get("btc_xpub")
-            )
-        elif "btc_xpub" in wallet_config and wallet_config["btc_xpub"]:
-            print("  Fetching Bitcoin balance from xpub...")
-            btc_balance = self.fetch_bitcoin_balance(xpub=wallet_config["btc_xpub"])
-        
-        # If blockchain fetch succeeded, use it (even if 0)
-        if btc_balance is not None:
-            balances["BTC"] = btc_balance
-            if btc_balance > 0:
-                print(f"    BTC: {btc_balance:.8f} (from blockchain)")
-            else:
-                print(f"    BTC: {btc_balance:.8f} (from blockchain - no balance)")
-        # Fallback to config only if blockchain fetch failed
-        elif "btc_balance" in wallet_config and wallet_config["btc_balance"] is not None:
-            try:
-                btc_balance = float(wallet_config["btc_balance"])
-                if btc_balance > 0:
-                    balances["BTC"] = btc_balance
-                    print(f"    BTC: {btc_balance:.8f} (from config - blockchain fetch failed)")
-            except (ValueError, TypeError):
-                print("    Invalid btc_balance in config")
-        
-        # If still no balance and prompting is enabled, ask user
+        # Define functions for each task to run in parallel
+        def get_btc_balance():
+            # Bitcoin - prioritize blockchain fetching over config
+            btc_val = None
+            if "btc_address" in wallet_config and wallet_config["btc_address"]:
+                print("  [Parallel] Starting Bitcoin fetch (address)...")
+                btc_val = self.fetch_bitcoin_balance(
+                    address=wallet_config["btc_address"],
+                    xpub=wallet_config.get("btc_xpub")
+                )
+            elif "btc_xpub" in wallet_config and wallet_config["btc_xpub"]:
+                print("  [Parallel] Starting Bitcoin fetch (xpub)...")
+                btc_val = self.fetch_bitcoin_balance(xpub=wallet_config["btc_xpub"])
+            
+            # Fallback to config
+            if btc_val is None and "btc_balance" in wallet_config and wallet_config["btc_balance"] is not None:
+                try:
+                    btc_val = float(wallet_config["btc_balance"])
+                    print(f"  [Parallel] Bitcoin: Using config backup")
+                except:
+                    pass
+            return ("BTC", btc_val)
+
+        def get_eth_balance():
+            if "eth_address" in wallet_config and wallet_config["eth_address"]:
+                print("  [Parallel] Starting Ethereum fetch...")
+                eth_val = self.fetch_ethereum_balance(wallet_config["eth_address"])
+                return ("ETH", eth_val)
+            return ("ETH", None)
+            
+        def get_erc20_balances():
+            projected_tokens = {}
+            if "eth_address" in wallet_config and wallet_config["eth_address"] and "erc20_tokens" in wallet_config:
+                print(f"  [Parallel] Starting ERC-20 token fetches ({len(wallet_config['erc20_tokens'])} tokens)...")
+                # We can even parallelize these sub-tasks if we wanted, but sticking to per-chain parallelization usually suffices
+                for token in wallet_config["erc20_tokens"]:
+                    symbol = token["symbol"]
+                    contract = token["contract"]
+                    decimals = token.get("decimals", 18)
+                    token_val = self.fetch_erc20_token_balance(
+                        wallet_config["eth_address"], 
+                        contract, 
+                        decimals
+                    )
+                    if token_val is not None:
+                        projected_tokens[symbol] = token_val
+            return ("ERC20", projected_tokens)
+
+        def get_xrp_balance():
+            if "xrp_address" in wallet_config and wallet_config["xrp_address"]:
+                print("  [Parallel] Starting XRP fetch...")
+                xrp_val = self.fetch_xrp_balance(wallet_config["xrp_address"])
+                return ("XRP", xrp_val)
+            return ("XRP", None)
+
+        def get_sol_balance():
+            if "sol_address" in wallet_config and wallet_config["sol_address"]:
+                print("  [Parallel] Starting Solana fetch...")
+                sol_val = self.fetch_solana_balance(wallet_config["sol_address"])
+                return ("SOL", sol_val)
+            return ("SOL", None)
+
+        # Execute in parallel
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [
+                executor.submit(get_btc_balance),
+                executor.submit(get_eth_balance),
+                executor.submit(get_erc20_balances),
+                executor.submit(get_xrp_balance),
+                executor.submit(get_sol_balance)
+            ]
+            
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    tag, result = future.result()
+                    
+                    if tag == "BTC":
+                        if result is not None:
+                            balances["BTC"] = result
+                            print(f"    -> Fetched BTC: {result:.8f}")
+                    elif tag == "ETH":
+                        if result is not None:
+                            balances["ETH"] = result
+                            print(f"    -> Fetched ETH: {result:.6f}")
+                    elif tag == "ERC20":
+                        if result:
+                            balances.update(result)
+                            for sym, val in result.items():
+                                print(f"    -> Fetched {sym}: {val:.6f}")
+                    elif tag == "XRP":
+                        if result is not None:
+                            balances["XRP"] = result
+                            print(f"    -> Fetched XRP: {result:.6f}")
+                    elif tag == "SOL":
+                        if result is not None:
+                            balances["SOL"] = result
+                            print(f"    -> Fetched SOL: {result:.6f}")
+                            
+                except Exception as e:
+                    print(f"    Error in parallel fetch: {e}")
+
+        # If still no Bitcoin balance and prompting is enabled, ask user
+        # This must be done AFTER parallel execution to avoid blocking threads
         if "BTC" not in balances and prompt_for_btc:
             try:
-                print("  Bitcoin balance:")
+                print("  Bitcoin balance (not found on blockchain/config):")
                 manual_input = input("    Enter your BTC balance (or press Enter to skip): ").strip()
                 if manual_input:
                     try:
@@ -1137,57 +1253,14 @@ class BlockchainBalanceFetcher:
                         if manual_balance > 0:
                             balances["BTC"] = manual_balance
                             print(f"    BTC: {manual_balance:.8f}")
-                        else:
-                            print("    Invalid balance (must be > 0), skipping BTC")
                     except ValueError:
                         print("    Invalid input, skipping manual BTC entry")
                 else:
-                    print("    Skipping BTC (no balance entered)")
+                    print("    Skipping BTC")
             except (EOFError, KeyboardInterrupt):
-                # Handle case where input() is not available (non-interactive mode)
-                print("    Skipping manual BTC input (non-interactive mode)")
+                pass
         
-        # Ethereum
-        if "eth_address" in wallet_config and wallet_config["eth_address"]:
-            print("  Fetching Ethereum balance...")
-            eth_balance = self.fetch_ethereum_balance(wallet_config["eth_address"])
-            if eth_balance is not None:
-                balances["ETH"] = eth_balance
-                print(f"    ETH: {eth_balance:.6f}")
-            
-            # ERC-20 tokens
-            if "erc20_tokens" in wallet_config:
-                for token in wallet_config["erc20_tokens"]:
-                    symbol = token["symbol"]
-                    contract = token["contract"]
-                    decimals = token.get("decimals", 18)
-                    print(f"  Fetching {symbol} balance...")
-                    token_balance = self.fetch_erc20_token_balance(
-                        wallet_config["eth_address"], 
-                        contract, 
-                        decimals
-                    )
-                    if token_balance is not None:
-                        balances[symbol] = token_balance
-                        print(f"    {symbol}: {token_balance:.6f}")
-        
-        # XRP
-        if "xrp_address" in wallet_config and wallet_config["xrp_address"]:
-            print("  Fetching XRP balance...")
-            xrp_balance = self.fetch_xrp_balance(wallet_config["xrp_address"])
-            if xrp_balance is not None:
-                balances["XRP"] = xrp_balance
-                print(f"    XRP: {xrp_balance:.6f}")
-        
-        # Solana
-        if "sol_address" in wallet_config and wallet_config["sol_address"]:
-            print("  Fetching Solana balance...")
-            sol_balance = self.fetch_solana_balance(wallet_config["sol_address"])
-            if sol_balance is not None:
-                balances["SOL"] = sol_balance
-                print(f"    SOL: {sol_balance:.6f}")
-        
-        print(f"\nSuccessfully fetched {len(balances)} asset balances\n")
+        print(f"\nSuccessfully fetched {len(balances)} asset balances (Parallel Mode)\n")
         return balances
     
     def has_bitcoin_transactions(self, address: str, retry_count: int = 2) -> bool:

@@ -1,0 +1,184 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="dashboard-grid">
+    <!-- Total Balance -->
+    <div class="card total-balance-card">
+        <div class="card-header">
+            <span class="card-title">Total Portfolio Value</span>
+            <i class="fa-solid fa-wallet" style="color: var(--accent-primary)"></i>
+        </div>
+        <div class="stat-value">${{ "{:,.2f}".format(total_value) }}</div>
+        <div class="stat-change up">
+            <i class="fa-solid fa-arrow-trend-up"></i>
+            <span>+2.4% (24h)</span> <!-- Placeholder for real 24h change -->
+        </div>
+    </div>
+
+    <!-- Quick Stats -->
+    <div class="card stat-card">
+        <div class="card-header"><span class="card-title">Top Performer</span></div>
+        <div class="stat-value" style="font-size: 1.5rem">
+            {% if analyses %}
+            {% set top_asset = analyses|sort(attribute='price_change_24h', reverse=True)|first %}
+            {{ top_asset.symbol }}
+            {% else %}
+            N/A
+            {% endif %}
+        </div>
+        <div class="stat-change up">
+            {% if analyses and top_asset.price_change_24h %}
+            +{{ "{:.2f}".format(top_asset.price_change_24h) }}%
+            {% else %}
+            0.00%
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="card stat-card">
+        <div class="card-header"><span class="card-title">Active Assets</span></div>
+        <div class="stat-value" style="font-size: 1.5rem">{{ portfolio|length }}</div>
+        <div class="stat-change" style="color: var(--text-secondary)">Tracking</div>
+    </div>
+
+    <!-- Charts -->
+    <div class="card chart-card">
+        <div class="card-header"><span class="card-title">Asset Allocation</span></div>
+        <div style="height: 250px; position: relative;">
+            <canvas id="allocationChart"></canvas>
+        </div>
+    </div>
+
+    <div class="card chart-card">
+        <div class="card-header"><span class="card-title">Portfolio History (7d)</span></div>
+        <div style="height: 250px; position: relative;">
+            <canvas id="historyChart"></canvas>
+        </div>
+    </div>
+
+    <!-- Assets Table -->
+    <div class="card table-card">
+        <div class="card-header"><span class="card-title">Your Assets</span></div>
+        <table class="assets-table">
+            <thead>
+                <tr>
+                    <th>Asset</th>
+                    <th class="text-right">Price</th>
+                    <th class="text-right">Balance</th>
+                    <th class="text-right">Value</th>
+                    <th class="text-right">24h Change</th>
+                    <th class="text-right">Allocation</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for symbol, asset in portfolio.items() %}
+                <tr>
+                    <td>
+                        <div class="coin-info">
+                            <div class="coin-icon">{{ symbol[:1] }}</div>
+                            <div>
+                                <div style="font-weight: 600">{{ asset.name }}</div>
+                                <div style="font-size: 0.8rem; color: var(--text-secondary)">{{ symbol }}</div>
+                            </div>
+                        </div>
+                    </td>
+                    <td class="text-right">${{ "{:,.2f}".format(asset.current_price) }}</td>
+                    <td class="text-right">{{ "{:,.4f}".format(asset.amount) }} {{ symbol }}</td>
+                    <td class="text-right" style="font-weight: 600">${{ "{:,.2f}".format(asset.value) }}</td>
+                    <td class="text-right">
+                        {% set ns = namespace(change=0) %}
+                        {% if analyses %}
+                        {% for analysis in analyses %}
+                        {% if analysis.symbol == symbol %}
+                        {% set ns.change = analysis.price_change_24h %}
+                        {% endif %}
+                        {% endfor %}
+                        {% endif %}
+
+                        <span class="{{ 'text-success' if ns.change >= 0 else 'text-danger' }}">
+                            {{ "{:+.2f}".format(ns.change) }}%
+                        </span>
+                    </td>
+                    <td class="text-right">
+                        <div style="display: flex; align-items: center; justify-content: flex-end; gap: 0.5rem">
+                            <span>{{ "{:.1f}".format(asset.allocation_percent) }}%</span>
+                            <div
+                                style="width: 50px; height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px;">
+                                <div
+                                    style="width: {{ asset.allocation_percent }}%; height: 100%; background: var(--accent-primary); border-radius: 2px;">
+                                </div>
+                            </div>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Prepare data from Jinja
+    const assets = [
+        {% for symbol, asset in portfolio.items() %}
+    { symbol: "{{ symbol }}", value: { { asset.value } }, allocation: { { asset.allocation_percent } } },
+    {% endfor %}
+    ];
+
+    // Allocation Chart
+    const ctxAlloc = document.getElementById('allocationChart').getContext('2d');
+    new Chart(ctxAlloc, {
+        type: 'doughnut',
+        data: {
+            labels: assets.map(a => a.symbol),
+            datasets: [{
+                data: assets.map(a => a.value),
+                backgroundColor: [
+                    '#38bdf8', '#818cf8', '#34d399', '#f472b6', '#fbbf24', '#f87171'
+                ],
+                borderWidth: 0
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { position: 'right', labels: { color: '#94a3b8' } }
+            }
+        }
+    });
+
+    // History Chart
+    const ctxHist = document.getElementById('historyChart').getContext('2d');
+
+    // Use data from backend if available, otherwise mock
+    const historyLabels = {{ hist_labels| tojson }} || ['Day 1', 'Day 2', 'Day 3', 'Day 4', 'Day 5', 'Day 6', 'Today'];
+    const historyData = {{ hist_values| tojson }} || [{{ total_value }} * 0.9, {{ total_value }} * 0.92, {{ total_value }} * 0.95, {{ total_value }} * 0.93, {{ total_value }} * 0.98, {{ total_value }} * 1.05, {{ total_value }}];
+
+    new Chart(ctxHist, {
+        type: 'line',
+        data: {
+            labels: historyLabels,
+            datasets: [{
+                label: 'Portfolio Value',
+                data: historyData,
+                borderColor: '#38bdf8',
+                backgroundColor: 'rgba(56, 189, 248, 0.1)',
+                fill: true,
+                tension: 0.4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } },
+                x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
+            },
+            plugins: { legend: { display: false } }
+        }
+    });
+</script>
+{% endblock %}

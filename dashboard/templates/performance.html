@@ -1,0 +1,58 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="dashboard-grid">
+    <div class="card chart-card" style="grid-column: span 4; height: 400px;">
+        <div class="card-header">
+            <span class="card-title">Portfolio Performance (All Time)</span>
+            <div style="display: flex; gap: 0.5rem;">
+                <button class="btn-icon"
+                    style="font-size: 0.9rem; background: rgba(255,255,255,0.1); padding: 0.2rem 0.5rem; border-radius: 4px;">1D</button>
+                <button class="btn-icon"
+                    style="font-size: 0.9rem; background: rgba(255,255,255,0.1); padding: 0.2rem 0.5rem; border-radius: 4px;">1W</button>
+                <button class="btn-icon"
+                    style="font-size: 0.9rem; background: rgba(255,255,255,0.1); padding: 0.2rem 0.5rem; border-radius: 4px;">1M</button>
+                <button class="btn-icon"
+                    style="font-size: 0.9rem; background: var(--accent-primary); color: white; padding: 0.2rem 0.5rem; border-radius: 4px;">ALL</button>
+            </div>
+        </div>
+        <div style="height: 320px; position: relative;">
+            <canvas id="performanceChart"></canvas>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const ctx = document.getElementById('performanceChart').getContext('2d');
+
+    // Data from backend
+    const labels = {{ hist_labels| tojson }} || [];
+    const values = {{ hist_values| tojson }} || [];
+
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels.length > 0 ? labels : ['No Data'],
+            datasets: [{
+                label: 'Total Value',
+                data: values.length > 0 ? values : [0],
+                borderColor: '#38bdf8',
+                backgroundColor: 'rgba(56, 189, 248, 0.1)',
+                fill: true,
+                tension: 0.4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } },
+                x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
+            },
+            plugins: { legend: { display: false } }
+        }
+    });
+</script>
+{% endblock %}

@@ -3,7 +3,7 @@ Dashboard API Backend
 Flask API server for portfolio dashboard
 """
 
-from flask import Flask, jsonify, send_from_directory, request
+from flask import Flask, jsonify, send_from_directory, request, render_template
 from flask_cors import CORS
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
@@ -41,7 +41,10 @@ try:
 except ImportError:
     TRANSACTION_TRACKER_AVAILABLE = False
 
-app = Flask(__name__, static_folder='dashboard/static', static_url_path='/static')
+app = Flask(__name__, 
+            static_folder='dashboard/static', 
+            static_url_path='/static',
+            template_folder='dashboard/templates')
 CORS(app)  # Enable CORS for development
 
 # Global cache for portfolio data with timestamp
@@ -121,53 +124,9 @@ def load_portfolio_data(force_refresh: bool = False):
         # It will use btc_balance from config if available
         portfolio, market_data = load_portfolio_from_wallet(prompt_for_btc=False)
         
-        # Fall back to manual portfolio if wallet loading fails
+        # If wallet loading fails and no portfolio is returned, stop here
         if portfolio is None:
-            # Use the manual portfolio from portfolio_evaluator.py
-            from portfolio_evaluator import COIN_NAMES
-            portfolio = {
-                "XRP": Asset(
-                    symbol="XRP",
-                    name="Ripple",
-                    amount=295.843,
-                    current_price=3.08,
-                    allocation_percent=44.81,
-                    value=913.09
-                ),
-                "BTC": Asset(
-                    symbol="BTC",
-                    name="Bitcoin",
-                    amount=0.00622109,
-                    current_price=134840.44,
-                    allocation_percent=41.16,
-                    value=838.85
-                ),
-                "ETH": Asset(
-                    symbol="ETH",
-                    name="Ethereum",
-                    amount=0.028903,
-                    current_price=4585.27,
-                    allocation_percent=6.5,
-                    value=132.52
-                ),
-                "SOL": Asset(
-                    symbol="SOL",
-                    name="Solana",
-                    amount=0.432648,
-                    current_price=199.96,
-                    allocation_percent=4.24,
-                    value=86.51
-                ),
-                "LINK": Asset(
-                    symbol="LINK",
-                    name="Chainlink",
-                    amount=3.17046,
-                    current_price=21.01,
-                    allocation_percent=3.27,
-                    value=66.63
-                )
-            }
-            market_data = None
+            return None, None, None
         
         # Create evaluator and run analysis
         evaluator = PortfolioEvaluator(portfolio)
@@ -191,10 +150,119 @@ def load_portfolio_data(force_refresh: bool = False):
         return None, None, None
 
 
+def get_portfolio_history_data(days: int = 30):
+    """Fetch portfolio history from DB and format for charts"""
+    labels = []
+    values = []
+    
+    if not DATABASE_AVAILABLE:
+        return labels, values
+        
+    try:
+        db = PortfolioDatabase()
+        # Get simple value history (list of (datetime, value) tuples)
+        history = db.get_portfolio_value_history(days=days)
+        db.close()
+        
+        for dt, value in history:
+            # dt is already a datetime object from get_portfolio_value_history
+            formatted_date = dt.strftime("%b %d %H:%M") # e.g. "Dec 10 14:30"
+            
+            labels.append(formatted_date)
+            # Ensure value is a float
+            values.append(float(value))
+            
+        return labels, values
+    except Exception as e:
+        print(f"Error fetching history: {e}")
+        # Print stack trace for debugging
+        import traceback
+        traceback.print_exc()
+        return [], []
+    except Exception as e:
+        print(f"Error fetching history: {e}")
+        return [], []
+
+
 @app.route('/')
 def index():
     """Serve the dashboard HTML"""
-    return send_from_directory('dashboard', 'index.html')
+    # Use render_template to process Jinja2 tags
+    portfolio, market_data, _ = load_portfolio_data()
+    
+    # Calculate some summary stats for the template
+    total_value = sum(asset.value for asset in portfolio.values()) if portfolio else 0.0
+    
+    # Get 7-day history for the sparkline chart
+    hist_labels, hist_values = get_portfolio_history_data(days=7)
+    
+    return render_template('index.html', 
+                           portfolio=portfolio or {}, 
+                           total_value=total_value,
+                           analyses=market_data,
+                           hist_labels=hist_labels,
+                           hist_values=hist_values,
+                           active_page='dashboard')
+
+
+@app.route('/refresh')
+def refresh_data():
+    """Force refresh of data"""
+    global _portfolio_cache
+    _portfolio_cache = None
+    return '<script>window.location.href="/";</script>'  # Redirect to home
+
+
+@app.route('/performance')
+def performance():
+    """Performance page"""
+    portfolio, market_data, _ = load_portfolio_data()
+    
+    # Get longer history for performance page
+    hist_labels, hist_values = get_portfolio_history_data(days=365)
+    
+    return render_template('performance.html', 
+                           active_page='performance',
+                           hist_labels=hist_labels,
+                           hist_values=hist_values)
+
+
+@app.route('/assets')
+def assets():
+    """Assets page"""
+    portfolio, market_data, _ = load_portfolio_data()
+    return render_template('assets.html', portfolio=portfolio or {}, active_page='assets')
+
+
+@app.route('/settings', methods=['GET', 'POST'])
+def settings():
+    """Settings page"""
+    config_path = 'wallet_config.json'
+    message = None
+    
+    if request.method == 'POST':
+        try:
+            new_config = request.form.get('config_json')
+            # Validate JSON
+            json_obj = json.loads(new_config)
+            # Save to file
+            with open(config_path, 'w') as f:
+                f.write(json.dumps(json_obj, indent=4))
+            message = "Configuration saved successfully!"
+        except Exception as e:
+            message = f"Error saving config: {e}"
+            
+    # Load current config
+    try:
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                config_dump = f.read()
+        else:
+            config_dump = "{}"
+    except:
+        config_dump = "{}"
+        
+    return render_template('settings.html', config_dump=config_dump, message=message, active_page='settings')
 
 
 @app.route('/api/portfolio/current')
@@ -609,5 +677,5 @@ if __name__ == '__main__':
     print("Dashboard will be available at: http://localhost:5000")
     print("Press Ctrl+C to stop the server")
     
-    app.run(debug=True, host='127.0.0.1', port=5000)
+    app.run(debug=False, host='127.0.0.1', port=5000)
 

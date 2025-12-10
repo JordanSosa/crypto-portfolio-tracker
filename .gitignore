@@ -4,6 +4,8 @@ wallet_config.json
 # Database files (user-specific historical data)
 *.db
 portfolio_history.db
+*.db-shm
+*.db-wal
 
 # Python cache
 __pycache__/

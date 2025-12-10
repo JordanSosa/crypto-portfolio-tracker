@@ -148,6 +148,10 @@ class MarketAnalysis:
     technical_indicators: Optional[TechnicalIndicatorsData] = None
     dca_multiplier: float = 1.0  # Suggested DCA amount multiplier
     dca_priority: int = 0  # Priority for DCA (higher = more important)
+    # Risk management fields
+    risk_metrics: Optional['RiskMetrics'] = None  # Forward reference to avoid circular import
+    stop_loss_suggestion: Optional['StopLossSuggestion'] = None
+    max_allocation_pct: Optional[float] = None  # Risk-adjusted max allocation
 
 
 class PortfolioEvaluator:
@@ -735,7 +739,10 @@ class PortfolioEvaluator:
                 suggested_action="No action - data unavailable",
                 technical_indicators=None,
                 dca_multiplier=1.0,
-                dca_priority=0
+                dca_priority=0,
+                risk_metrics=None,
+                stop_loss_suggestion=None,
+                max_allocation_pct=None
             )
         
         data = market_data[symbol]
@@ -777,6 +784,70 @@ class PortfolioEvaluator:
             momentum, risk_adjusted_momentum, volatility, trend, technical_indicators
         )
         
+        # Calculate risk metrics (for long-term strategy)
+        risk_metrics = None
+        stop_loss_suggestion = None
+        max_allocation_pct = None
+        
+        try:
+            from risk_management import RiskManager, RiskTolerance
+            
+            # Get historical prices
+            historical_prices = None
+            if DATABASE_AVAILABLE:
+                try:
+                    db = PortfolioDatabase()
+                    historical_prices_data = db.get_historical_prices(symbol, days=200)
+                    db.close()
+                    if historical_prices_data:
+                        historical_prices = [price for _, price in historical_prices_data]
+                except Exception:
+                    pass
+            
+            if historical_prices and len(historical_prices) >= 30:
+                # Initialize risk manager (could be configurable)
+                risk_manager = RiskManager(risk_tolerance=RiskTolerance.MODERATE)
+                
+                # Calculate risk metrics
+                risk_metrics = risk_manager.calculate_risk_metrics(
+                    symbol=symbol,
+                    prices=historical_prices,
+                    current_price=asset.current_price
+                )
+                
+                if risk_metrics:
+                    max_allocation_pct = risk_metrics.max_allocation_pct
+                    
+                    # Check if current allocation exceeds risk-adjusted limit
+                    if asset.allocation_percent > max_allocation_pct:
+                        # Add warning to reason
+                        reason += f" (Risk warning: {asset.allocation_percent:.1f}% exceeds risk-adjusted limit of {max_allocation_pct:.1f}%)"
+                    
+                    # Suggest stop-loss (for long-term: only if significant gains)
+                    # Try to get entry price from transaction tracker if available
+                    entry_price = None
+                    try:
+                        from transaction_tracker import TransactionTracker
+                        tracker = TransactionTracker()
+                        avg_cost = tracker.get_average_cost(symbol)
+                        if avg_cost:
+                            entry_price = avg_cost
+                    except:
+                        pass
+                    
+                    stop_loss_suggestion = risk_manager.suggest_stop_loss(
+                        symbol=symbol,
+                        current_price=asset.current_price,
+                        entry_price=entry_price,
+                        prices=historical_prices
+                    )
+        except ImportError:
+            # Risk management module not available
+            pass
+        except Exception:
+            # Don't fail if risk calculation fails
+            pass
+        
         return MarketAnalysis(
             symbol=symbol,
             price_change_24h=price_change_24h,
@@ -791,7 +862,10 @@ class PortfolioEvaluator:
             suggested_action=action,
             technical_indicators=technical_indicators,
             dca_multiplier=dca_multiplier,
-            dca_priority=priority
+            dca_priority=priority,
+            risk_metrics=risk_metrics,
+            stop_loss_suggestion=stop_loss_suggestion,
+            max_allocation_pct=max_allocation_pct
         )
     
     def _generate_recommendation(
@@ -1086,6 +1160,27 @@ class PortfolioEvaluator:
                 print(f"  DCA Multiplier: {analysis.dca_multiplier:.2f}x")
                 print(f"  DCA Priority: {analysis.dca_priority}/10")
             
+            # Show risk metrics if available
+            if analysis.risk_metrics:
+                rm = analysis.risk_metrics
+                print(f"  Risk Score: {rm.risk_score:.1f}/100")
+                print(f"  Annualized Volatility: {rm.volatility_annualized:.1f}%")
+                if rm.atr:
+                    print(f"  ATR: AU${rm.atr:,.2f}")
+                if analysis.max_allocation_pct:
+                    print(f"  Max Risk-Adjusted Allocation: {analysis.max_allocation_pct:.1f}%")
+                    if asset.allocation_percent > analysis.max_allocation_pct:
+                        print(f"  ⚠️  WARNING: Current allocation exceeds risk-adjusted limit")
+            
+            # Show stop-loss suggestions if available
+            if analysis.stop_loss_suggestion and analysis.stop_loss_suggestion.recommendation != "HOLD":
+                sl = analysis.stop_loss_suggestion
+                if sl.trailing_stop:
+                    print(f"  Trailing Stop: AU${sl.trailing_stop:,.2f} ({sl.trailing_stop_pct:.1f}% below peak)")
+                if sl.emergency_stop:
+                    print(f"  Emergency Stop: AU${sl.emergency_stop:,.2f} (60% below entry)")
+                print(f"  Stop-Loss Recommendation: {sl.recommendation}")
+            
             print(f"  Reason: {analysis.reason}")
             if show_action:
                 print(f"  Action: {analysis.suggested_action}")
@@ -1184,6 +1279,66 @@ class PortfolioEvaluator:
                 import traceback
                 traceback.print_exc()
         
+        # Calculate portfolio risk analysis
+        portfolio_risk = None
+        risk_adjusted_limits = None
+        try:
+            from risk_management import RiskManager, RiskTolerance
+            
+            # Collect risk metrics and historical prices
+            risk_metrics_dict = {}
+            asset_prices_dict = {}
+            
+            if DATABASE_AVAILABLE:
+                try:
+                    db = PortfolioDatabase()
+                    for symbol in self.portfolio.keys():
+                        # Get risk metrics from analyses
+                        for analysis in analyses:
+                            if analysis.symbol == symbol and analysis.risk_metrics:
+                                risk_metrics_dict[symbol] = analysis.risk_metrics
+                        
+                        # Get historical prices
+                        historical_prices = db.get_historical_prices(symbol, days=200)
+                        if historical_prices:
+                            asset_prices_dict[symbol] = [price for _, price in historical_prices]
+                    db.close()
+                    
+                    # Calculate portfolio risk if we have data
+                    if risk_metrics_dict and asset_prices_dict:
+                        risk_manager = RiskManager(risk_tolerance=RiskTolerance.MODERATE)
+                        portfolio_risk = risk_manager.analyze_portfolio_risk(
+                            self.portfolio, asset_prices_dict, risk_metrics_dict
+                        )
+                        
+                        # Extract risk-adjusted limits
+                        risk_adjusted_limits = {
+                            symbol: metrics.max_allocation_pct 
+                            for symbol, metrics in risk_metrics_dict.items()
+                        }
+                except Exception as e:
+                    # Don't fail if risk analysis fails
+                    pass
+        except ImportError:
+            # Risk management module not available
+            pass
+        
+        # Display portfolio risk analysis if available
+        if portfolio_risk:
+            print("\n" + "-" * 80)
+            print("PORTFOLIO RISK ANALYSIS")
+            print("-" * 80)
+            print(f"Total Risk Score: {portfolio_risk.total_risk_score:.1f}/100")
+            print(f"Diversification Score: {portfolio_risk.diversification_score:.1f}/100")
+            print(f"Concentration Risk: {portfolio_risk.concentration_risk:.1f}%")
+            print(f"Correlation Risk: {portfolio_risk.correlation_risk:.1f}/100")
+            
+            if portfolio_risk.warnings:
+                print("\n⚠️  RISK WARNINGS:")
+                for warning in portfolio_risk.warnings:
+                    print(f"  - {warning}")
+            print()
+        
         # Get rebalancing actions for summary (calculate once, use multiple times)
         rebalancing_actions = []
         if show_rebalancing and REBALANCER_AVAILABLE:
@@ -1193,7 +1348,8 @@ class PortfolioEvaluator:
                 market_data = getattr(self, 'market_data', None)
                 rebalancing_actions = rebalancer.calculate_rebalancing(
                     self.portfolio, 
-                    market_data=market_data
+                    market_data=market_data,
+                    risk_adjusted_limits=risk_adjusted_limits
                 )
                 if rebalancing_actions:
                     print("\n")
