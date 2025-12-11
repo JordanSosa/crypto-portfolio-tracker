@@ -43,3 +43,6 @@ dist/
 # pyenv
 .python-version
 
+
+# Local cache
+portfolio_cache.pkl

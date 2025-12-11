@@ -5,10 +5,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CryptoFolio Pro</title>
-    <!-- Google Fonts: Inter -->
+    <!-- Google Fonts: Quicksand & Nunito -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&family=Quicksand:wght@400;500;600;700&display=swap"
+        rel="stylesheet">
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom CSS -->
@@ -22,21 +24,24 @@
         <!-- Sidebar -->
         <aside class="sidebar">
             <div class="logo">
-                <i class="fa-solid fa-layer-group"></i>
+                <i class="fa-solid fa-cookie-bite"></i>
                 <span>CryptoFolio</span>
             </div>
             <nav>
                 <a href="/" class="nav-item {{ 'active' if active_page == 'dashboard' }}">
-                    <i class="fa-solid fa-chart-pie"></i> Dashboard
+                    <i class="fa-solid fa-house-chimney"></i> Dashboard
                 </a>
                 <a href="/performance" class="nav-item {{ 'active' if active_page == 'performance' }}">
-                    <i class="fa-solid fa-arrow-trend-up"></i> Performance
+                    <i class="fa-solid fa-chart-line"></i> Performance
+                </a>
+                <a href="/pnl" class="nav-item {{ 'active' if active_page == 'pnl' }}">
+                    <i class="fa-solid fa-piggy-bank"></i> Profit & Loss
                 </a>
                 <a href="/assets" class="nav-item {{ 'active' if active_page == 'assets' }}">
-                    <i class="fa-solid fa-wallet"></i> Assets
+                    <i class="fa-solid fa-coins"></i> Assets
                 </a>
                 <a href="/settings" class="nav-item {{ 'active' if active_page == 'settings' }}">
-                    <i class="fa-solid fa-gear"></i> Settings
+                    <i class="fa-solid fa-wand-magic-sparkles"></i> Settings
                 </a>
             </nav>
             <div class="user-profile">

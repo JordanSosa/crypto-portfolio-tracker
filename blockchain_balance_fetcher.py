@@ -205,9 +205,9 @@ class BlockchainBalanceFetcher:
         print(f"    Checking {len(addresses)} addresses for activity (parallel)...")
         addresses_with_txs = []
         
-        # Use a max of 5 workers to avoid hitting rate limits too hard
+        # Use a max of 3 workers to avoid hitting rate limits too hard (Blockstream/BlockCypher)
         # We process in order to apply gap limit logic if needed
-        MAX_WORKERS = 5
+        MAX_WORKERS = 3
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             # Create a dictionary to map futures to addresses (to keep order)
@@ -443,7 +443,7 @@ class BlockchainBalanceFetcher:
         
         return None
     
-    def fetch_ethereum_balance(self, address: str) -> Optional[float]:
+    def fetch_ethereum_balance(self, address: str, retry_count: int = 3) -> Optional[float]:
         """Fetch Ethereum (ETH) balance from address"""
         try:
             if not self.etherscan_api_key or self.etherscan_api_key == "YOUR_ETHERSCAN_API_KEY_HERE":
@@ -473,27 +473,54 @@ class BlockchainBalanceFetcher:
                 "apikey": self.etherscan_api_key
             }
             
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
+            for attempt in range(retry_count):
+                try:
+                    response = requests.get(url, params=params, timeout=10)
+                    
+                    if response.status_code == 429:
+                        if attempt < retry_count - 1:
+                            wait_time = (attempt + 1) * 2
+                            print(f"    Rate limit on Etherscan, waiting {wait_time}s...")
+                            time.sleep(wait_time)
+                            continue
+                    
+                    response.raise_for_status()
+                    data = response.json()
+                    
+                    if data["status"] == "1":
+                        # Balance is returned in Wei, convert to ETH
+                        wei_balance = int(data["result"])
+                        eth_balance = wei_balance / 1e18
+                        return eth_balance
+                    else:
+                        error_msg = data.get('message', 'Unknown error')
+                        result = data.get('result', '')
+                        
+                        if "rate limit" in str(error_msg).lower() or "rate limit" in str(result).lower():
+                             if attempt < retry_count - 1:
+                                wait_time = (attempt + 1) * 2
+                                print(f"    Etherscan rate limit message, waiting {wait_time}s...")
+                                time.sleep(wait_time)
+                                continue
+                        
+                        print(f"    Error: {error_msg}")
+                        if "Invalid API Key" in error_msg:
+                            print("    Your Etherscan API key appears to be invalid. Please check it at https://etherscan.io/apis")
+                        else:
+                            print(f"    Address used: {address}")
+                            print(f"    Result: {result}")
+                        return None
+                        
+                except requests.exceptions.RequestException as e:
+                    if attempt < retry_count - 1:
+                        wait_time = (attempt + 1) * 2
+                        print(f"    Error on Etherscan: {e}, retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+                        continue
+                    print(f"    Error fetching Ethereum balance: {e}")
+                    return None
             
-            if data["status"] == "1":
-                # Balance is returned in Wei, convert to ETH
-                wei_balance = int(data["result"])
-                eth_balance = wei_balance / 1e18
-                return eth_balance
-            else:
-                error_msg = data.get('message', 'Unknown error')
-                result = data.get('result', '')
-                print(f"    Error: {error_msg}")
-                if "Invalid API Key" in error_msg:
-                    print("    Your Etherscan API key appears to be invalid. Please check it at https://etherscan.io/apis")
-                elif "rate limit" in error_msg.lower():
-                    print("    Rate limit exceeded. Please wait a moment and try again.")
-                else:
-                    print(f"    Address used: {address}")
-                    print(f"    Result: {result}")
-                return None
+            return None
                 
         except Exception as e:
             print(f"    Error fetching Ethereum balance: {e}")
@@ -501,7 +528,7 @@ class BlockchainBalanceFetcher:
                 print(f"    Address used: {address}")
             return None
     
-    def fetch_erc20_token_balance(self, address: str, token_contract: str, decimals: int = 18) -> Optional[float]:
+    def fetch_erc20_token_balance(self, address: str, token_contract: str, decimals: int = 18, retry_count: int = 3) -> Optional[float]:
         """
         Fetch ERC-20 token balance from Ethereum address
         
@@ -509,6 +536,7 @@ class BlockchainBalanceFetcher:
             address: Ethereum wallet address
             token_contract: Token contract address
             decimals: Token decimals (default 18)
+            retry_count: Retry attempts
         """
         try:
             if not self.etherscan_api_key or self.etherscan_api_key == "YOUR_ETHERSCAN_API_KEY_HERE":
@@ -531,25 +559,49 @@ class BlockchainBalanceFetcher:
                 "apikey": self.etherscan_api_key
             }
             
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            
-            if data["status"] == "1":
-                token_balance = int(data["result"]) / (10 ** decimals)
-                return token_balance
-            else:
-                # Don't print error for 0 balance (status 0 with result "0" is normal)
-                if data.get("result") != "0":
-                    error_msg = data.get('message', 'Unknown error')
-                    print(f"    Error fetching token balance: {error_msg}")
-                return None
+            for attempt in range(retry_count):
+                try:
+                    response = requests.get(url, params=params, timeout=10)
+                    
+                    if response.status_code == 429:
+                        if attempt < retry_count - 1:
+                            wait_time = (attempt + 1) * 2
+                            time.sleep(wait_time)
+                            continue
+                    
+                    response.raise_for_status()
+                    data = response.json()
+                    
+                    if data["status"] == "1":
+                        token_balance = int(data["result"]) / (10 ** decimals)
+                        return token_balance
+                    else:
+                        result = data.get("result")
+                        # Don't print error for 0 balance (status 0 with result "0" is normal)
+                        if result != "0":
+                            error_msg = data.get('message', 'Unknown error')
+                            if "rate limit" in str(error_msg).lower() or "rate limit" in str(result).lower():
+                                if attempt < retry_count - 1:
+                                    wait_time = (attempt + 1) * 2
+                                    time.sleep(wait_time)
+                                    continue
+                            print(f"    Error fetching token balance: {error_msg}")
+                        return None
+                        
+                except requests.exceptions.RequestException as e:
+                    if attempt < retry_count - 1:
+                        wait_time = (attempt + 1) * 2
+                        time.sleep(wait_time)
+                        continue
+                    print(f"    Error fetching ERC-20 token balance: {e}")
+                    return None
+            return None
                 
         except Exception as e:
             print(f"    Error fetching ERC-20 token balance: {e}")
             return None
     
-    def fetch_xrp_balance(self, address: str) -> Optional[float]:
+    def fetch_xrp_balance(self, address: str, retry_count: int = 3) -> Optional[float]:
         """Fetch XRP balance from XRPL address"""
         try:
             # Using XRPL public API
@@ -564,23 +616,41 @@ class BlockchainBalanceFetcher:
                 }]
             }
             
-            response = requests.post(url, json=payload, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            
-            if "result" in data and "account_data" in data["result"]:
-                # XRP balance is in drops (1 XRP = 1,000,000 drops)
-                drops = int(data["result"]["account_data"]["Balance"])
-                xrp_balance = drops / 1000000.0
-                return xrp_balance
-            else:
-                return None
+            for attempt in range(retry_count):
+                try:
+                    response = requests.post(url, json=payload, timeout=10)
+                    
+                    if response.status_code == 429:
+                         if attempt < retry_count - 1:
+                            wait_time = (attempt + 1) * 2
+                            time.sleep(wait_time)
+                            continue
+                    
+                    response.raise_for_status()
+                    data = response.json()
+                    
+                    if "result" in data and "account_data" in data["result"]:
+                        # XRP balance is in drops (1 XRP = 1,000,000 drops)
+                        drops = int(data["result"]["account_data"]["Balance"])
+                        xrp_balance = drops / 1000000.0
+                        return xrp_balance
+                    else:
+                        return None
+                        
+                except requests.exceptions.RequestException as e:
+                    if attempt < retry_count - 1:
+                        wait_time = (attempt + 1) * 2
+                        time.sleep(wait_time)
+                        continue
+                    print(f"Error fetching XRP balance: {e}")
+                    return None
+            return None
                 
         except Exception as e:
             print(f"Error fetching XRP balance: {e}")
             return None
     
-    def fetch_solana_balance(self, address: str) -> Optional[float]:
+    def fetch_solana_balance(self, address: str, retry_count: int = 3) -> Optional[float]:
         """Fetch SOL balance from Solana address"""
         try:
             # Using Solana public RPC endpoint
@@ -592,17 +662,35 @@ class BlockchainBalanceFetcher:
                 "params": [address]
             }
             
-            response = requests.post(url, json=payload, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            
-            if "result" in data:
-                # SOL balance is in lamports (1 SOL = 1,000,000,000 lamports)
-                lamports = data["result"]["value"]
-                sol_balance = lamports / 1e9
-                return sol_balance
-            else:
-                return None
+            for attempt in range(retry_count):
+                try:
+                    response = requests.post(url, json=payload, timeout=10)
+                    
+                    if response.status_code == 429:
+                         if attempt < retry_count - 1:
+                            wait_time = (attempt + 1) * 2
+                            time.sleep(wait_time)
+                            continue
+
+                    response.raise_for_status()
+                    data = response.json()
+                    
+                    if "result" in data:
+                        # SOL balance is in lamports (1 SOL = 1,000,000,000 lamports)
+                        lamports = data["result"]["value"]
+                        sol_balance = lamports / 1e9
+                        return sol_balance
+                    else:
+                        return None
+                        
+                except requests.exceptions.RequestException as e:
+                    if attempt < retry_count - 1:
+                        wait_time = (attempt + 1) * 2
+                        time.sleep(wait_time)
+                        continue
+                    print(f"Error fetching Solana balance: {e}")
+                    return None
+            return None
                 
         except Exception as e:
             print(f"Error fetching Solana balance: {e}")
@@ -1263,47 +1351,60 @@ class BlockchainBalanceFetcher:
         print(f"\nSuccessfully fetched {len(balances)} asset balances (Parallel Mode)\n")
         return balances
     
-    def has_bitcoin_transactions(self, address: str, retry_count: int = 2) -> bool:
+    def has_bitcoin_transactions(self, address: str, retry_count: int = 3) -> bool:
         """
-        Quick check if a Bitcoin address has any transactions
-        Uses Blockstream API address info endpoint (lighter than fetching all transactions)
-        
-        Args:
-            address: Bitcoin address
-            retry_count: Number of retry attempts
-            
-        Returns:
-            True if address has transactions, False otherwise
+        Check if a Bitcoin address has any transactions (used for gap limit)
+        Tries Blockstream first, then BlockCypher
         """
+        # Try Blockstream API
         for attempt in range(retry_count):
             try:
-                # Blockstream API: Get address info (lightweight check)
                 url = f"https://blockstream.info/api/address/{address}"
                 response = requests.get(url, timeout=10)
                 
                 if response.status_code == 429:
                     if attempt < retry_count - 1:
-                        time.sleep(2)
+                        wait_time = (attempt + 1) * 2
+                        time.sleep(wait_time)
                         continue
-                    return False
+                    # If rate limited on last attempt, try fallback
+                    break
                 
                 response.raise_for_status()
                 data = response.json()
                 
-                # Check if address has any transactions
                 tx_count = data.get("chain_stats", {}).get("tx_count", 0)
                 mempool_tx_count = data.get("mempool_stats", {}).get("tx_count", 0)
-                total_tx_count = tx_count + mempool_tx_count
+                return (tx_count + mempool_tx_count) > 0
                 
-                return total_tx_count > 0
-                
-            except requests.exceptions.RequestException:
+            except Exception:
                 if attempt < retry_count - 1:
                     time.sleep(1)
                     continue
-                return False
+        
+        # Fallback to BlockCypher
+        for attempt in range(retry_count):
+            try:
+                # BlockCypher's balance endpoint includes n_tx
+                url = f"https://api.blockcypher.com/v1/btc/main/addrs/{address}/balance"
+                response = requests.get(url, timeout=10)
+                
+                if response.status_code == 429:
+                    if attempt < retry_count - 1:
+                        wait_time = (attempt + 1) * 2
+                        time.sleep(wait_time)
+                        continue
+                    return False # Give up
+                
+                response.raise_for_status()
+                data = response.json()
+                
+                return data.get("n_tx", 0) > 0
+                
             except Exception:
-                return False
+                if attempt < retry_count - 1:
+                    time.sleep(1)
+                    continue
         
         return False
     

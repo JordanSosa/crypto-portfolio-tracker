@@ -1,184 +1,488 @@
 {% extends "layout.html" %}
 
 {% block content %}
-<div class="dashboard-grid">
-    <!-- Total Balance -->
-    <div class="card total-balance-card">
-        <div class="card-header">
-            <span class="card-title">Total Portfolio Value</span>
-            <i class="fa-solid fa-wallet" style="color: var(--accent-primary)"></i>
-        </div>
-        <div class="stat-value">${{ "{:,.2f}".format(total_value) }}</div>
-        <div class="stat-change up">
-            <i class="fa-solid fa-arrow-trend-up"></i>
-            <span>+2.4% (24h)</span> <!-- Placeholder for real 24h change -->
-        </div>
-    </div>
+<div class="dashboard-grid-3-col">
+    <!-- COLUMN 1: PORTFOLIO -->
+    <div class="col-portfolio">
+        <h2 class="section-title">Portfolio</h2>
 
-    <!-- Quick Stats -->
-    <div class="card stat-card">
-        <div class="card-header"><span class="card-title">Top Performer</span></div>
-        <div class="stat-value" style="font-size: 1.5rem">
-            {% if analyses %}
-            {% set top_asset = analyses|sort(attribute='price_change_24h', reverse=True)|first %}
-            {{ top_asset.symbol }}
-            {% else %}
-            N/A
-            {% endif %}
+        <!-- Total Value Card -->
+        <div class="card total-balance-card mb-4" style="grid-column: span 1;">
+            <div class="card-header">
+                <span class="card-title">Total Balance</span>
+                <div class="flex gap-2">
+                    <button id="sync-btn" class="btn btn-sm btn-primary" onclick="syncTransactions()">
+                        <i class="fas fa-sync-alt"></i> Sync
+                    </button>
+                    <i class="fas fa-wallet text-gray-400"></i>
+                </div>
+            </div>
+            <div class="stat-value">${{ "{:,.2f}".format(total_value) }}</div>
+            <div class="stat-change {{ 'up' if analyses|sum(attribute='price_change_24h') > 0 else 'down' }}">
+                <i
+                    class="fas fa-{{ 'arrow-up' if analyses|sum(attribute='price_change_24h') > 0 else 'arrow-down' }}"></i>
+                Today's Market Movement
+            </div>
         </div>
-        <div class="stat-change up">
-            {% if analyses and top_asset.price_change_24h %}
-            +{{ "{:.2f}".format(top_asset.price_change_24h) }}%
-            {% else %}
-            0.00%
-            {% endif %}
+
+        <!-- Allocation Chart -->
+        <div class="card chart-card mb-4" style="grid-column: span 1; min-height: 300px;">
+            <div class="card-header">
+                <span class="card-title">Allocation</span>
+            </div>
+            <div style="height: 200px; position: relative;">
+                <canvas id="allocationChart"></canvas>
+            </div>
         </div>
-    </div>
 
-    <div class="card stat-card">
-        <div class="card-header"><span class="card-title">Active Assets</span></div>
-        <div class="stat-value" style="font-size: 1.5rem">{{ portfolio|length }}</div>
-        <div class="stat-change" style="color: var(--text-secondary)">Tracking</div>
-    </div>
-
-    <!-- Charts -->
-    <div class="card chart-card">
-        <div class="card-header"><span class="card-title">Asset Allocation</span></div>
-        <div style="height: 250px; position: relative;">
-            <canvas id="allocationChart"></canvas>
-        </div>
-    </div>
-
-    <div class="card chart-card">
-        <div class="card-header"><span class="card-title">Portfolio History (7d)</span></div>
-        <div style="height: 250px; position: relative;">
-            <canvas id="historyChart"></canvas>
-        </div>
-    </div>
-
-    <!-- Assets Table -->
-    <div class="card table-card">
-        <div class="card-header"><span class="card-title">Your Assets</span></div>
-        <table class="assets-table">
-            <thead>
-                <tr>
-                    <th>Asset</th>
-                    <th class="text-right">Price</th>
-                    <th class="text-right">Balance</th>
-                    <th class="text-right">Value</th>
-                    <th class="text-right">24h Change</th>
-                    <th class="text-right">Allocation</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for symbol, asset in portfolio.items() %}
-                <tr>
-                    <td>
-                        <div class="coin-info">
-                            <div class="coin-icon">{{ symbol[:1] }}</div>
-                            <div>
-                                <div style="font-weight: 600">{{ asset.name }}</div>
-                                <div style="font-size: 0.8rem; color: var(--text-secondary)">{{ symbol }}</div>
-                            </div>
+        <!-- Asset List (Simplified) -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <span class="card-title">Assets</span>
+            </div>
+            <div class="asset-list-simple">
+                {% for asset in portfolio.values()|sort(attribute='value', reverse=True) %}
+                <div class="asset-item-simple">
+                    <div class="flex items-center gap-2">
+                        <div class="coin-icon-sm">{{ asset.symbol[:1] }}</div>
+                        <div>
+                            <div class="font-bold">{{ asset.symbol }}</div>
+                            <div class="text-xs text-gray-500">{{ "{:,.4f}".format(asset.amount) }}</div>
                         </div>
-                    </td>
-                    <td class="text-right">${{ "{:,.2f}".format(asset.current_price) }}</td>
-                    <td class="text-right">{{ "{:,.4f}".format(asset.amount) }} {{ symbol }}</td>
-                    <td class="text-right" style="font-weight: 600">${{ "{:,.2f}".format(asset.value) }}</td>
-                    <td class="text-right">
-                        {% set ns = namespace(change=0) %}
-                        {% if analyses %}
-                        {% for analysis in analyses %}
-                        {% if analysis.symbol == symbol %}
-                        {% set ns.change = analysis.price_change_24h %}
-                        {% endif %}
-                        {% endfor %}
-                        {% endif %}
-
-                        <span class="{{ 'text-success' if ns.change >= 0 else 'text-danger' }}">
-                            {{ "{:+.2f}".format(ns.change) }}%
-                        </span>
-                    </td>
-                    <td class="text-right">
-                        <div style="display: flex; align-items: center; justify-content: flex-end; gap: 0.5rem">
-                            <span>{{ "{:.1f}".format(asset.allocation_percent) }}%</span>
+                    </div>
+                    <div class="text-right">
+                        <div class="font-bold">${{ "{:,.2f}".format(asset.value) }}</div>
+                        <div class="flex flex-col items-end">
+                            <div class="text-xs text-gray-500">{{ "{:.1f}%".format(asset.allocation_percent) }} alloc
+                            </div>
+                            {% if unrealized_pnl and asset.symbol in unrealized_pnl %}
                             <div
-                                style="width: 50px; height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px;">
-                                <div
-                                    style="width: {{ asset.allocation_percent }}%; height: 100%; background: var(--accent-primary); border-radius: 2px;">
-                                </div>
+                                class="text-xs font-bold {{ 'text-success' if unrealized_pnl[asset.symbol].pnl >= 0 else 'text-danger' }}">
+                                {{ "{:+.1f}%".format(unrealized_pnl[asset.symbol].pnl_percent) }} PnL
                             </div>
+                            {% endif %}
                         </div>
-                    </td>
-                </tr>
+                    </div>
+                </div>
                 {% endfor %}
-            </tbody>
-        </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- COLUMN 2: PERFORMANCE -->
+    <div class="col-performance">
+        <h2 class="section-title">Performance</h2>
+
+        <!-- Performance Metrics -->
+        <div class="grid-2-col mb-4">
+            <!-- Calculate weighted returns roughly for display -->
+            {% set daily_return = 0 %}
+            {% set weekly_return = 0 %}
+            {% set monthly_return = 0 %}
+
+            {% for analysis in analyses %}
+            {% set weight = portfolio[analysis.symbol].allocation_percent / 100 %}
+            {% set daily_return = daily_return + (analysis.price_change_24h * weight) %}
+            {% set weekly_return = weekly_return + (analysis.price_change_7d * weight) %}
+            {% set monthly_return = monthly_return + (analysis.price_change_30d * weight) %}
+            {% endfor %}
+
+            <div class="card p-4">
+                <div class="text-sm text-gray-500 mb-1">24h Return</div>
+                <div class="text-xl font-bold {{ 'text-success' if daily_return >= 0 else 'text-danger' }}">
+                    {{ "{:+.2f}%".format(daily_return) }}
+                </div>
+            </div>
+            <div class="card p-4">
+                <div class="text-sm text-gray-500 mb-1">7d Return</div>
+                <div class="text-xl font-bold {{ 'text-success' if weekly_return >= 0 else 'text-danger' }}">
+                    {{ "{:+.2f}%".format(weekly_return) }}
+                </div>
+            </div>
+        </div>
+
+        <div class="card p-4 mb-4">
+            <div class="text-sm text-gray-500 mb-1">30d Return</div>
+            <div class="text-2xl font-bold {{ 'text-success' if monthly_return >= 0 else 'text-danger' }}">
+                {{ "{:+.2f}%".format(monthly_return) }}
+            </div>
+        </div>
+
+        <!-- History Chart -->
+        <div class="card chart-card" style="grid-column: span 1;  min-height: 400px;">
+            <div class="card-header">
+                <span class="card-title">Portfolio Value (7d)</span>
+            </div>
+            <div style="height: 320px; position: relative;">
+                <canvas id="portfolioChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- COLUMN 3: AI ACTIONS -->
+    <div class="col-actions">
+        <h2 class="section-title">AI Action Plan</h2>
+
+        <!-- Executive Summary -->
+        <div class="card summary-card mb-4 {{ executive_summary.mood if executive_summary else 'neutral' }}">
+            <div class="card-header">
+                <span class="card-title"><i class="fas fa-robot mr-2"></i> {{ executive_summary.title if
+                    executive_summary else 'Analysis' }}</span>
+            </div>
+            <p class="summary-text">
+                {{ executive_summary.text if executive_summary else 'Generating market analysis...' }}
+            </p>
+            {% if executive_summary %}
+            <div class="summary-stats mt-3 flex gap-4">
+                {% if executive_summary.total_buy > 0 %}
+                <div class="tag tag-buy">Buy Target: ${{ "{:,.0f}".format(executive_summary.total_buy) }}</div>
+                {% endif %}
+                {% if executive_summary.total_sell > 0 %}
+                <div class="tag tag-sell">Sell Target: ${{ "{:,.0f}".format(executive_summary.total_sell) }}</div>
+                {% endif %}
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Rebalancing Plan -->
+        {% if rebalancing_plan %}
+        <div class="card rebalance-card mb-4" style="border-left: 4px solid #f472b6;">
+            <div class="card-header">
+                <span class="card-title">⚖️ Strategic Rebalance</span>
+            </div>
+
+            <div class="rebalance-list">
+                {% for action in rebalancing_plan %}
+                <div
+                    class="rebalance-item mb-2 p-3 rounded flex justify-between items-center {{ 'bg-red-50' if action.action == 'SELL' else 'bg-green-50' }}">
+                    <div>
+                        <div class="flex items-center gap-2">
+                            <span
+                                class="font-bold {{ 'text-red-600' if action.action == 'SELL' else 'text-green-600' }}">{{
+                                action.action }}</span>
+                            <span class="font-bold">{{ action.symbol }}</span>
+                        </div>
+                        <div class="text-xs text-gray-500 mt-1">
+                            Target: {{ "{:.1f}".format(action.target_allocation) }}% (Now: {{
+                            "{:.1f}".format(action.current_allocation) }}%)
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <div class="font-mono font-bold text-lg">
+                            ${{ "{:,.2f}".format(action.value_diff|abs) }}
+                        </div>
+                        <div class="text-xs text-gray-500">
+                            {{ "{:+.2f}".format(action.amount_diff) }} units
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Action Items List -->
+        <div class="action-list">
+            {% for analysis in analyses|sort(attribute='dca_priority', reverse=True) %}
+            {% if analysis.dca_priority >= 3 or 'Buy' in analysis.suggested_action or 'Sell' in
+            analysis.suggested_action %}
+            <div class="card action-card mb-3 priority-{{ analysis.dca_priority }}">
+                <div class="flex justify-between items-start mb-2">
+                    <div class="flex items-center gap-2">
+                        <div class="coin-icon-xs">{{ analysis.symbol[:1] }}</div>
+                        <span class="font-bold">{{ analysis.symbol }}</span>
+                    </div>
+                    <span class="badge-priority p-{{ analysis.dca_priority }}">Priority {{ analysis.dca_priority
+                        }}</span>
+                </div>
+
+                <div class="action-text font-bold text-lg mb-1">
+                    {{ analysis.suggested_action }}
+                </div>
+
+                <div class="reason-text text-sm text-gray-500">
+                    {{ analysis.reason }}
+                </div>
+
+                {% if analysis.technical_indicators %}
+                <div class="tech-tags mt-2 flex gap-2 flex-wrap">
+                    {% if analysis.technical_indicators.rsi %}
+                    <span class="tag-xs">RSI: {{ "{:.0f}".format(analysis.technical_indicators.rsi) }}</span>
+                    {% endif %}
+                    <span class="tag-xs">{{ analysis.trend|capitalize }}</span>
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
+            {% endfor %}
+
+            {% if analyses|length == 0 %}
+            <div class="text-center text-gray-400 p-8">
+                No active recommendations.
+            </div>
+            {% endif %}
+        </div>
     </div>
 </div>
-{% endblock %}
 
-{% block scripts %}
+<!-- Chart Data Scripts -->
 <script>
-    // Prepare data from Jinja
-    const assets = [
-        {% for symbol, asset in portfolio.items() %}
-    { symbol: "{{ symbol }}", value: { { asset.value } }, allocation: { { asset.allocation_percent } } },
-    {% endfor %}
-    ];
+    document.addEventListener('DOMContentLoaded', function () {
+        // Portfolio History Chart
+        const ctx = document.getElementById('portfolioChart').getContext('2d');
+        const gradient = ctx.createLinearGradient(0, 0, 0, 400);
+        gradient.addColorStop(0, 'rgba(244, 114, 182, 0.5)');
+        gradient.addColorStop(1, 'rgba(244, 114, 182, 0.0)');
 
-    // Allocation Chart
+        new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: {{ hist_labels| tojson }},
+        datasets: [{
+            label: 'Portfolio Value (AUD)',
+            data: {{ hist_values| tojson }},
+        borderColor: '#f472b6',
+        backgroundColor: gradient,
+        borderWidth: 3,
+        tension: 0.4,
+        fill: true,
+        pointRadius: 0,
+        pointHoverRadius: 6
+                }]
+            },
+        options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: { display: false },
+            tooltip: {
+                mode: 'index',
+                intersect: false,
+                backgroundColor: 'rgba(255, 255, 255, 0.9)',
+                titleColor: '#1e293b',
+                bodyColor: '#475569',
+                borderColor: '#e2e8f0',
+                borderWidth: 1,
+                padding: 10,
+                displayColors: false
+            }
+        },
+        scales: {
+            x: { display: false },
+            y: {
+                display: true,
+                grid: { color: 'rgba(0,0,0,0.05)' },
+                ticks: { color: '#94a3b8' }
+            }
+        },
+        interaction: {
+            intersect: false,
+            mode: 'index',
+        },
+    }
+        });
+
+    // Allocation Doughnut
     const ctxAlloc = document.getElementById('allocationChart').getContext('2d');
     new Chart(ctxAlloc, {
         type: 'doughnut',
         data: {
-            labels: assets.map(a => a.symbol),
-            datasets: [{
-                data: assets.map(a => a.value),
-                backgroundColor: [
-                    '#38bdf8', '#818cf8', '#34d399', '#f472b6', '#fbbf24', '#f87171'
-                ],
-                borderWidth: 0
-            }]
-        },
+            labels: [{% for asset in portfolio.values() %}"{{ asset.symbol }}",{% endfor %}],
+        datasets: [{
+            data: [{% for asset in portfolio.values() %}{{ asset.value }}, {% endfor %}],
+        backgroundColor: [
+        '#f472b6', '#c084fc', '#2dd4bf', '#fbbf24', '#f87171', '#34d399', '#60a5fa'
+    ],
+        borderWidth: 0
+                }]
+            },
         options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: { position: 'right', labels: { color: '#94a3b8' } }
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: '75%',
+        plugins: {
+            legend: {
+                position: 'right',
+                labels: { boxWidth: 12, usePointStyle: true }
             }
         }
+    }
+        });
+    // Sync Transactions
+    window.syncTransactions = function () {
+        const btn = document.getElementById('sync-btn');
+        const icon = btn.querySelector('i');
+
+        btn.disabled = true;
+        icon.classList.add('fa-spin');
+
+        fetch('/api/portfolio/sync-transactions', { method: 'POST' })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    alert('Sync completed! Page will reload.');
+                    window.location.reload();
+                } else {
+                    alert('Sync error: ' + (data.error || 'Unknown error'));
+                    btn.disabled = false;
+                    icon.classList.remove('fa-spin');
+                }
+            })
+            .catch(error => {
+                alert('Sync failed: ' + error);
+                btn.disabled = false;
+                icon.classList.remove('fa-spin');
+            });
+    }
+
     });
+</script>
 
-    // History Chart
-    const ctxHist = document.getElementById('historyChart').getContext('2d');
+<!-- Chat Widget -->
+<div id="chat-widget-container">
+    <div id="chat-window" class="hidden">
+        <div class="chat-header">
+            <div class="chat-title">
+                <span>🤖</span>
+                <span>AntiGravity AI</span>
+            </div>
+            <button onclick="toggleChat()" class="chat-close-btn">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        <div id="chat-messages">
+            <div class="message bot">
+                <div class="bubble">
+                    Hello! I'm active and ready to chat. Ask me anything about your positions or strategy.
+                </div>
+            </div>
+        </div>
+        <div class="chat-input-area">
+            <input type="text" id="chat-input" placeholder="Ask a question..." onkeypress="handleChatKey(event)">
+            <button onclick="sendChatMessage()" id="chat-send-btn">
+                <i class="fas fa-paper-plane"></i>
+            </button>
+        </div>
+    </div>
+    <button id="chat-toggle-btn" onclick="toggleChat()">
+        <i class="fas fa-comment-dots"></i>
+    </button>
+</div>
 
-    // Use data from backend if available, otherwise mock
-    const historyLabels = {{ hist_labels| tojson }} || ['Day 1', 'Day 2', 'Day 3', 'Day 4', 'Day 5', 'Day 6', 'Today'];
-    const historyData = {{ hist_values| tojson }} || [{{ total_value }} * 0.9, {{ total_value }} * 0.92, {{ total_value }} * 0.95, {{ total_value }} * 0.93, {{ total_value }} * 0.98, {{ total_value }} * 1.05, {{ total_value }}];
+<script>
+    // Chat Logic
+    let isChatOpen = false;
 
-    new Chart(ctxHist, {
-        type: 'line',
-        data: {
-            labels: historyLabels,
-            datasets: [{
-                label: 'Portfolio Value',
-                data: historyData,
-                borderColor: '#38bdf8',
-                backgroundColor: 'rgba(56, 189, 248, 0.1)',
-                fill: true,
-                tension: 0.4
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-                y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } },
-                x: { grid: { display: false }, ticks: { color: '#94a3b8' } }
-            },
-            plugins: { legend: { display: false } }
+    function toggleChat() {
+        const window = document.getElementById('chat-window');
+        const input = document.getElementById('chat-input');
+
+        isChatOpen = !isChatOpen;
+
+        if (isChatOpen) {
+            window.classList.remove('hidden');
+            setTimeout(() => input.focus(), 100);
+        } else {
+            window.classList.add('hidden');
         }
-    });
+    }
+
+    function handleChatKey(event) {
+        if (event.key === 'Enter') {
+            sendChatMessage();
+        }
+    }
+
+    async function sendChatMessage() {
+        const input = document.getElementById('chat-input');
+        const sendBtn = document.getElementById('chat-send-btn');
+        const text = input.value.trim();
+
+        if (!text) return;
+
+        // Add User Message
+        appendMessage(text, 'user');
+        input.value = '';
+        input.disabled = true;
+        sendBtn.disabled = true;
+
+        // Add Loading Indicator
+        const loadingId = appendLoading();
+        scrollToBottom();
+
+        try {
+            const response = await fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: text })
+            });
+
+            const data = await response.json();
+
+            // Remove loading
+            const loader = document.getElementById(loadingId);
+            if (loader) loader.remove();
+
+            if (data.error) {
+                appendMessage('Error: ' + data.error, 'bot');
+            } else if (data.response) {
+                // Formatting
+                let cleanText = data.response;
+                cleanText = cleanText.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+                cleanText = cleanText.replace(/\n/g, '<br>');
+
+                appendMessage(cleanText, 'bot');
+            }
+        } catch (e) {
+            const loader = document.getElementById(loadingId);
+            if (loader) loader.remove();
+            appendMessage('Connection error. Please try again.', 'bot');
+        } finally {
+            input.disabled = false;
+            sendBtn.disabled = false;
+            input.focus();
+            scrollToBottom();
+        }
+    }
+
+    function appendMessage(text, sender) {
+        const container = document.getElementById('chat-messages');
+        const msgDiv = document.createElement('div');
+        msgDiv.className = `message ${sender}`;
+
+        const bubble = document.createElement('div');
+        bubble.className = 'bubble';
+        bubble.innerHTML = text;
+
+        msgDiv.appendChild(bubble);
+        container.appendChild(msgDiv);
+        scrollToBottom();
+    }
+
+    function appendLoading() {
+        const container = document.getElementById('chat-messages');
+        const id = 'loading-' + Date.now();
+        const msgDiv = document.createElement('div');
+        msgDiv.className = 'message bot';
+        msgDiv.id = id;
+
+        msgDiv.innerHTML = `
+            <div class="bubble typing-indicator" style="flex-direction: column; align-items: flex-start; gap: 0.5rem;">
+                <span class="text-xs text-gray-400">Thinking (Gemini 3 is reasoning)...</span>
+                <div style="display: flex; gap: 4px;">
+                    <div class="dot"></div>
+                    <div class="dot"></div>
+                    <div class="dot"></div>
+                </div>
+            </div>
+        `;
+        container.appendChild(msgDiv);
+        return id;
+    }
+
+    function scrollToBottom() {
+        const container = document.getElementById('chat-messages');
+        container.scrollTop = container.scrollHeight;
+    }
 </script>
 {% endblock %}

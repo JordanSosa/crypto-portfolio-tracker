@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 import os
 import sys
+import json
 
 # Import portfolio modules
 try:
@@ -41,18 +42,33 @@ try:
 except ImportError:
     TRANSACTION_TRACKER_AVAILABLE = False
 
+try:
+    from ai_advisor import AIAdvisor
+    AI_ADVISOR_AVAILABLE = True
+except ImportError:
+    AI_ADVISOR_AVAILABLE = False
+
+try:
+    from blockchain_transaction_importer import import_from_wallet_config
+    IMPORTER_AVAILABLE = True
+except ImportError:
+    IMPORTER_AVAILABLE = False
+
 app = Flask(__name__, 
             static_folder='dashboard/static', 
             static_url_path='/static',
             template_folder='dashboard/templates')
 CORS(app)  # Enable CORS for development
 
+import pickle
+
 # Global cache for portfolio data with timestamp
 _portfolio_cache = None
 _analyses_cache = None
 _market_data_cache = None
 _cache_timestamp = None
-CACHE_DURATION_SECONDS = 300  # Cache for 5 minutes to avoid rate limits
+CACHE_DURATION_SECONDS = 14400  # Cache for 4 hours
+CACHE_FILE = "portfolio_cache.pkl"
 
 
 def asset_to_dict(asset: Asset) -> Dict:
@@ -109,17 +125,36 @@ def load_portfolio_data(force_refresh: bool = False):
     """Load portfolio data and cache it"""
     global _portfolio_cache, _analyses_cache, _market_data_cache, _cache_timestamp
     
-    # Check if we have valid cached data
+    # Check if we have valid memory cache
     if not force_refresh and _portfolio_cache is not None and _cache_timestamp is not None:
         cache_age = (datetime.now() - _cache_timestamp).total_seconds()
         if cache_age < CACHE_DURATION_SECONDS:
-            # Return cached data
             return _portfolio_cache, _analyses_cache, _market_data_cache
+
+    # Check for file-based cache if memory cache is empty or expired
+    if not force_refresh:
+        try:
+            if os.path.exists(CACHE_FILE):
+                # Check file modification time
+                file_mod_time = datetime.fromtimestamp(os.path.getmtime(CACHE_FILE))
+                if (datetime.now() - file_mod_time).total_seconds() < CACHE_DURATION_SECONDS:
+                    print("Loading portfolio data from disk cache...")
+                    with open(CACHE_FILE, 'rb') as f:
+                        cache_data = pickle.load(f)
+                        _portfolio_cache = cache_data.get('portfolio')
+                        _analyses_cache = cache_data.get('analyses')
+                        _market_data_cache = cache_data.get('market_data')
+                        _cache_timestamp = cache_data.get('timestamp')
+                        return _portfolio_cache, _analyses_cache, _market_data_cache
+        except Exception as e:
+            print(f"Error loading cache from disk: {e}")
+            # Continue to fetch fresh data
     
     if not EVALUATOR_AVAILABLE:
         return None, None, None
     
     try:
+        print("Fetching fresh portfolio data from APIs...")
         # Try to load from wallet, but disable prompts for API use
         # It will use btc_balance from config if available
         portfolio, market_data = load_portfolio_from_wallet(prompt_for_btc=False)
@@ -140,6 +175,19 @@ def load_portfolio_data(force_refresh: bool = False):
         _analyses_cache = analyses
         _market_data_cache = evaluator.market_data
         _cache_timestamp = datetime.now()
+
+        # Save to disk cache
+        try:
+            with open(CACHE_FILE, 'wb') as f:
+                pickle.dump({
+                    'portfolio': _portfolio_cache,
+                    'analyses': _analyses_cache,
+                    'market_data': _market_data_cache,
+                    'timestamp': _cache_timestamp
+                }, f)
+            print(f"Saved portfolio data to cache file: {CACHE_FILE}")
+        except Exception as e:
+            print(f"Error saving cache to disk: {e}")
         
         return portfolio, analyses, evaluator.market_data
         
@@ -148,6 +196,72 @@ def load_portfolio_data(force_refresh: bool = False):
         import traceback
         traceback.print_exc()
         return None, None, None
+
+
+def get_ai_summary(portfolio, analyses):
+    """
+    Get executive summary from AI Advisor or return None if not available/configured.
+    """
+    if not AI_ADVISOR_AVAILABLE:
+        return None
+        
+    try:
+        # Load config to get API Key
+        config_path = 'wallet_config.json'
+        api_key = None
+        model_name = "gemini-3-pro-preview" # Default per user request
+        
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                try:
+                    config = json.load(f)
+                    api_key = config.get('gemini_api_key')
+                    model_name = config.get('gemini_model', "gemini-3-pro-preview")
+                except:
+                    pass
+        
+        if not api_key:
+            return None
+            
+        advisor = AIAdvisor(api_key=api_key, model_name=model_name)
+        
+        # Create a lookup for analysis data
+        analysis_map = {a.symbol: a for a in analyses} if analyses else {}
+        
+        # Calculate approx 24h PnL
+        total_24h_pnl = 0
+        for s, a in portfolio.items():
+            if s in analysis_map and analysis_map[s].price_change_24h:
+                # Value / (1 + pct/100) = value_yesterday
+                # PnL = Value - value_yesterday
+                pct = analysis_map[s].price_change_24h
+                val_yesterday = a.value / (1 + pct/100)
+                total_24h_pnl += (a.value - val_yesterday)
+
+        # Prepare context data
+        portfolio_context = {
+            'total_value': sum(a.value for a in portfolio.values()),
+            'total_pnl': total_24h_pnl,
+            'assets': [
+                {
+                    'symbol': s,
+                    'value': a.value,
+                    'allocation': a.allocation_percent,
+                    'change_24h': analysis_map[s].price_change_24h if s in analysis_map else 0.0
+                }
+                for s, a in portfolio.items()
+            ]
+        }
+        
+        analysis_context = [
+            analysis_to_dict(a) for a in analyses
+        ]
+        
+        return advisor.generate_portfolio_summary(portfolio_context, analysis_context)
+        
+    except Exception as e:
+        print(f"Error getting AI summary: {e}")
+        return None
 
 
 def get_portfolio_history_data(days: int = 30):
@@ -196,10 +310,91 @@ def index():
     # Get 7-day history for the sparkline chart
     hist_labels, hist_values = get_portfolio_history_data(days=7)
     
+    # Generate executive summary
+    executive_summary = None
+    if market_data and EVALUATOR_AVAILABLE:
+        try:
+             # Try AI first
+             executive_summary = get_ai_summary(portfolio, market_data)
+             
+             if not executive_summary:
+                 # Fallback to rule-based
+                 temp_evaluator = PortfolioEvaluator(portfolio)
+                 executive_summary = temp_evaluator.generate_executive_summary(market_data)
+        except Exception as e:
+            print(f"Error generating summary for template: {e}")
+
+    # Calculate Unrealized P&L (Copy of logic for template render)
+    unrealized_pnl = {}
+    total_unrealized_pnl = 0.0
+    try:
+        from transaction_tracker import TransactionTracker
+        tracker = TransactionTracker()
+        cost_basis_data = tracker.get_portfolio_cost_basis()
+        
+        for symbol, asset in portfolio.items():
+            if symbol in cost_basis_data:
+                basis = cost_basis_data[symbol].get('total_cost_basis', 0.0)
+                # Check for alternative key if needed or just be safe
+                if basis is None: 
+                    basis = 0.0
+                
+                # Debug individual asset
+                # print(f"DEBUG: {symbol} - Basis: {basis}, Value: {asset.value}")
+
+                pnl = asset.value - basis
+                pnl_percent = (pnl / basis * 100) if basis > 0 else 0
+                
+                unrealized_pnl[symbol] = {
+                    'pnl': pnl, 
+                    'pnl_percent': pnl_percent,
+                    'cost_basis': basis
+                }
+                total_unrealized_pnl += pnl
+            else:
+                unrealized_pnl[symbol] = {'pnl': 0, 'pnl_percent': 0, 'cost_basis': 0}
+        
+        print(f"DEBUG: P&L Calculated for {len(unrealized_pnl)} assets. Total: {total_unrealized_pnl}")
+        print(f"DEBUG: Sample P&L: {list(unrealized_pnl.items())[:1]}")
+
+    except Exception as e:
+        print(f"Error calculating P&L for template: {e}")
+        import traceback
+        traceback.print_exc()
+        unrealized_pnl = {s: {'pnl': 0, 'pnl_percent': 0} for s in portfolio}
+
+    # Calculate Rebalancing Plan
+    rebalancing_plan = []
+    if REBALANCER_AVAILABLE and EVALUATOR_AVAILABLE:
+        try:
+             rebalancer = PortfolioRebalancer()
+             actions = rebalancer.calculate_rebalancing(
+                portfolio, 
+                rebalance_threshold=1.0, 
+                market_data=market_data
+             )
+             for action in actions:
+                if action.action == "HOLD": continue
+                rebalancing_plan.append({
+                    'symbol': action.symbol,
+                    'action': action.action,
+                    'amount_diff': action.amount_diff,
+                    'value_diff': action.value_diff,
+                    'target_allocation': action.target_allocation,
+                    'current_allocation': action.current_allocation,
+                    'reason': f"Target: {action.target_allocation}%"
+                })
+        except Exception as e:
+             print(f"Error calculating rebalancing for template: {e}")
+
     return render_template('index.html', 
                            portfolio=portfolio or {}, 
                            total_value=total_value,
                            analyses=market_data,
+                           executive_summary=executive_summary,
+                           unrealized_pnl=unrealized_pnl,
+                           total_unrealized_pnl=total_unrealized_pnl,
+                           rebalancing_plan=rebalancing_plan,
                            hist_labels=hist_labels,
                            hist_values=hist_values,
                            active_page='dashboard')
@@ -210,6 +405,15 @@ def refresh_data():
     """Force refresh of data"""
     global _portfolio_cache
     _portfolio_cache = None
+    
+    # Clear disk cache
+    try:
+        if os.path.exists(CACHE_FILE):
+            os.remove(CACHE_FILE)
+            print("Disk cache cleared")
+    except Exception as e:
+        print(f"Error clearing disk cache: {e}")
+        
     return '<script>window.location.href="/";</script>'  # Redirect to home
 
 
@@ -243,8 +447,18 @@ def settings():
     if request.method == 'POST':
         try:
             new_config = request.form.get('config_json')
+            api_key = request.form.get('gemini_api_key')
+            model_name = request.form.get('gemini_model')
+            
             # Validate JSON
             json_obj = json.loads(new_config)
+            
+            # Update AI settings if provided (or if empty string to clear)
+            if api_key is not None:
+                json_obj['gemini_api_key'] = api_key
+            if model_name is not None:
+                json_obj['gemini_model'] = model_name
+                
             # Save to file
             with open(config_path, 'w') as f:
                 f.write(json.dumps(json_obj, indent=4))
@@ -253,16 +467,63 @@ def settings():
             message = f"Error saving config: {e}"
             
     # Load current config
+    gemini_api_key = ""
+    gemini_model = "gemini-3-pro-preview"
+    
     try:
         if os.path.exists(config_path):
             with open(config_path, 'r') as f:
                 config_dump = f.read()
+                # Also decode to get specific fields
+                try:
+                    data = json.loads(config_dump)
+                    gemini_api_key = data.get('gemini_api_key', '')
+                    gemini_model = data.get('gemini_model', 'gemini-3-pro-preview')
+                except:
+                    pass
         else:
             config_dump = "{}"
     except:
         config_dump = "{}"
         
-    return render_template('settings.html', config_dump=config_dump, message=message, active_page='settings')
+    return render_template('settings.html', 
+                          config_dump=config_dump, 
+                          gemini_api_key=gemini_api_key,
+                          gemini_model=gemini_model,
+                          message=message, 
+                          active_page='settings')
+
+
+@app.route('/pnl')
+def pnl():
+    """Profit & Loss Analysis page"""
+    if not DATABASE_AVAILABLE or not TRANSACTION_TRACKER_AVAILABLE:
+        return render_template('pnl.html', error="Transaction tracking not available", active_page='pnl')
+        
+    try:
+        db = PortfolioDatabase()
+        # Initialize tracker if not already done in DB (DB usually handles it but let's be safe)
+        if not hasattr(db, 'transaction_tracker'):
+             tracker = TransactionTracker()
+        else:
+             tracker = db.transaction_tracker
+             
+        # Get P&L summary
+        summary = tracker.get_portfolio_pnl_summary()
+        
+        # Also need current portfolio for context
+        portfolio, _, _ = load_portfolio_data()
+        
+        db.close()
+        # tracker.close() # DB closes connection usually
+        
+        return render_template('pnl.html', 
+                               summary=summary, 
+                               portfolio=portfolio,
+                               active_page='pnl')
+    except Exception as e:
+        print(f"Error loading PnL: {e}")
+        return render_template('pnl.html', error=str(e), active_page='pnl')
 
 
 @app.route('/api/portfolio/current')
@@ -275,14 +536,154 @@ def get_current_portfolio():
     
     total_value = sum(asset.value for asset in portfolio.values())
     
+    today_summary = None
+    if analyses and EVALUATOR_AVAILABLE:
+        try:
+             # Try AI first
+             today_summary = get_ai_summary(portfolio, analyses)
+             
+             if not today_summary:
+                 temp_evaluator = PortfolioEvaluator(portfolio)
+                 today_summary = temp_evaluator.generate_executive_summary(analyses)
+        except Exception as e:
+            print(f"Error generating summary: {e}")
+
+    # Calculate Rebalancing Plan
+    rebalancing_plan = []
+    if REBALANCER_AVAILABLE and EVALUATOR_AVAILABLE:
+        try:
+            # We need risk-adjusted limits from Evaluator
+            # Since we didn't keep the evaluator instance, let's create one or get limits
+            if not today_summary: # If summary failed, try init evaluator again
+                 temp_evaluator = PortfolioEvaluator(portfolio)
+            else:
+                 # Re-init evaluator just to be sure we have clean state or use existing
+                 temp_evaluator = PortfolioEvaluator(portfolio)
+            
+            # Extract risk limits - assuming this method exists or we can calculate them
+            # Looking at PortfolioEvaluator, it likely has '_calculate_risk_adjusted_limits' or similar
+            # If not exposed publicly, we might need to modify it or just trust the rebalancer's default
+            
+            # Actually, let's check PortfolioEvaluator for public methods for limits
+            # For now, we will pass None for limits and let rebalancer use standard targets
+            # UNLESS we find safe_exposure_limits
+            
+            risk_limits = None
+            # Check if we can get limits
+            # temp_evaluator._calculate_risk_metrics() usually sets internal state
+            
+            rebalancer = PortfolioRebalancer()
+            # Use market data for prices of assets we don't own if needed (though portfolio has current prices)
+            
+            actions = rebalancer.calculate_rebalancing(
+                portfolio, 
+                rebalance_threshold=1.0, # Tighter threshold for "exact" figures
+                market_data=market_data
+            )
+            
+            # Format for API
+            for action in actions:
+                if action.action == "HOLD": continue
+                
+                rebalancing_plan.append({
+                    'symbol': action.symbol,
+                    'action': action.action,
+                    'amount_diff': action.amount_diff,
+                    'value_diff': action.value_diff, # Positive for Buy, Negative for Sell
+                    'target_allocation': action.target_allocation,
+                    'current_allocation': action.current_allocation,
+                    'reason': f"Target: {action.target_allocation}%"
+                })
+                
+        except Exception as e:
+            print(f"Error calculating rebalancing: {e}")
+
+    # Calculate Unrealized P&L
+    unrealized_pnl = {}
+    total_unrealized_pnl = 0.0
+    try:
+        from transaction_tracker import TransactionTracker
+        tracker = TransactionTracker()
+        # Calculate P&L for all assets. 
+        # Note: calculate_unrealized_pnl_with_prices might fail if API limit reached, 
+        # so we fallback to manual calculation if needed or just use what we have.
+        # Since we already have current prices in 'portfolio' objects, we can optimize.
+        
+        # We'll use the tracker to get cost basis, then calculate against current portfolio values
+        # This is more efficient than re-fetching prices
+        cost_basis_data = tracker.get_portfolio_cost_basis()
+        
+        for symbol, asset in portfolio.items():
+            if symbol in cost_basis_data:
+                # Calculate P&L: Current Value - Cost Basis
+                # Note: This assumes cost_basis_data matches current holdings. 
+                # If transactions are missing, this might be off.
+                basis = cost_basis_data[symbol].get('total_cost_basis', 0.0)
+                if basis is None: basis = 0.0
+
+                # Scale basis to current holding amount if needed (e.g. if we sold some)
+                # But get_portfolio_cost_basis should return remaining cost basis for open lots.
+                
+                # Let's verify against asset.value which is (amount * current_price)
+                pnl = asset.value - basis
+                pnl_percent = (pnl / basis * 100) if basis > 0 else 0
+                
+                unrealized_pnl[symbol] = {
+                    'pnl': pnl,
+                    'pnl_percent': pnl_percent,
+                    'cost_basis': basis
+                }
+                total_unrealized_pnl += pnl
+            else:
+                unrealized_pnl[symbol] = {'pnl': 0, 'pnl_percent': 0, 'cost_basis': 0}
+
+    except Exception as e:
+        print(f"Error calculating P&L: {e}")
+        unrealized_pnl = {s: {'pnl': 0, 'pnl_percent': 0} for s in portfolio}
+    
     return jsonify({
         'portfolio': [asset_to_dict(asset) for asset in portfolio.values()],
         'analyses': [analysis_to_dict(analysis) for analysis in analyses] if analyses else [],
+        'executive_summary': today_summary,
+        'unrealized_pnl': unrealized_pnl,
+        'total_unrealized_pnl': total_unrealized_pnl,
+        'rebalancing_plan': rebalancing_plan,
         'total_value': total_value,
         'asset_count': len(portfolio),
         'timestamp': datetime.now().isoformat()
     })
 
+
+@app.route('/api/portfolio/sync-transactions', methods=['POST'])
+def sync_transactions():
+    """Trigger transaction import from blockchain"""
+    if not IMPORTER_AVAILABLE:
+        return jsonify({'error': 'Transaction importer module not found'}), 501
+    
+    try:
+        # Clear cache to ensure fresh data after import
+        global _portfolio_cache, _analyses_cache, _market_data_cache, _cache_timestamp
+        _portfolio_cache = None
+        _analyses_cache = None
+        _market_data_cache = None
+        _cache_timestamp = None
+        if os.path.exists(CACHE_FILE):
+            try:
+                os.remove(CACHE_FILE)
+            except:
+                pass
+
+        # Run import
+        stats = import_from_wallet_config(limit_per_address=50) # Limit to 50 for speed
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Transaction import completed',
+            'stats': stats
+        })
+    except Exception as e:
+        print(f"Import error: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/portfolio/history')
 def get_portfolio_history():
@@ -662,6 +1063,86 @@ def get_cost_basis():
         
         return jsonify(cost_basis)
     except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+
+@app.route('/api/chat', methods=['POST'])
+def chat():
+    """Chat with the AI Advisor about the portfolio"""
+    if not AI_ADVISOR_AVAILABLE:
+        return jsonify({'error': 'AI Advisor not available'}), 503
+        
+    try:
+        data = request.json
+        user_message = data.get('message', '')
+        if not user_message:
+            return jsonify({'error': 'No message provided'}), 400
+            
+        # Load portfolio context
+        portfolio, analyses, market_data = load_portfolio_data()
+        
+        # Load config to get API Key (reused logic)
+        config_path = 'wallet_config.json'
+        api_key = None
+        model_name = "gemini-3-pro-preview" 
+        
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                try:
+                    config = json.load(f)
+                    api_key = config.get('gemini_api_key')
+                    model_name = config.get('gemini_model', "gemini-3-pro-preview")
+                except:
+                    pass
+        
+        if not api_key:
+            return jsonify({'response': "Please configure your Gemini API Key in Settings first."})
+
+        # Initialize advisor
+        advisor = AIAdvisor(api_key=api_key, model_name=model_name)
+        
+        # Prepare context (reusing logic from get_ai_summary, improved with analysis_map)
+        analysis_map = {a.symbol: a for a in analyses} if analyses else {}
+        total_24h_pnl = 0
+        for s, a in portfolio.items():
+            if s in analysis_map and analysis_map[s].price_change_24h:
+                pct = analysis_map[s].price_change_24h
+                val_yesterday = a.value / (1 + pct/100)
+                total_24h_pnl += (a.value - val_yesterday)
+
+        portfolio_context = {
+            'total_value': sum(a.value for a in portfolio.values()),
+            'total_pnl': total_24h_pnl,
+            'assets': [
+                {
+                    'symbol': s,
+                    'value': a.value,
+                    'allocation': a.allocation_percent,
+                    'change_24h': analysis_map[s].price_change_24h if s in analysis_map else 0.0,
+                    'price': a.current_price
+                }
+                for s, a in portfolio.items()
+            ]
+        }
+        
+        market_analysis_context = [
+            {
+                'symbol': a.symbol,
+                'trend': a.trend,
+                'rsi': a.technical_indicators.rsi if a.technical_indicators else None,
+                'action': a.suggested_action
+            }
+            for a in analyses
+        ] if analyses else []
+
+        # Get response
+        response_text = advisor.get_chat_response(user_message, portfolio_context, market_analysis_context)
+        
+        return jsonify({'response': response_text})
+        
+    except Exception as e:
+        print(f"Chat error: {e}")
         return jsonify({'error': str(e)}), 500
 
 

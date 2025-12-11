@@ -8,6 +8,29 @@
         </div>
         <form action="/settings" method="POST">
             <div style="display: flex; flex-direction: column; gap: 1rem;">
+                <div style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
+                    <h3 style="margin-top: 0; font-size: 1.1rem; color: #a78bfa;">🤖 Gemini AI Integration</h3>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem;">
+                        <div>
+                            <label style="display: block; margin-bottom: 0.5rem; color: #94a3b8;">Google API Key</label>
+                            <input type="password" name="gemini_api_key" value="{{ gemini_api_key }}"
+                                style="width: 100%; padding: 0.5rem; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1); background: #0f172a; color: white;">
+                        </div>
+                        <div>
+                            <label style="display: block; margin-bottom: 0.5rem; color: #94a3b8;">Model</label>
+                            <select name="gemini_model"
+                                style="width: 100%; padding: 0.5rem; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1); background: #0f172a; color: white;">
+                                <option value="gemini-3-pro-preview" {{ 'selected' if
+                                    gemini_model=='gemini-3-pro-preview' }}>Gemini 3.0 Pro (Preview)</option>
+                                <option value="gemini-1.5-pro" {{ 'selected' if gemini_model=='gemini-1.5-pro' }}>Gemini
+                                    1.5 Pro</option>
+                                <option value="gemini-1.5-flash" {{ 'selected' if gemini_model=='gemini-1.5-flash' }}>
+                                    Gemini 1.5 Flash (Faster)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
                 <div style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 8px;">
                     <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 0.5rem;">
                         <i class="fa-solid fa-circle-info"></i>
