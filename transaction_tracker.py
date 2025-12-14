@@ -16,23 +16,10 @@ from transaction_models import (
 )
 
 # Try to import constants, fallback if not available
-try:
-    from constants import (
-        COINGECKO_BASE_URL, COIN_IDS, DEFAULT_CURRENCY,
-        API_RETRY_COUNT, API_TIMEOUT, API_RATE_LIMIT_BACKOFF_BASE
-    )
-except ImportError:
-    COINGECKO_BASE_URL = "https://api.coingecko.com/api/v3"
-    COIN_IDS = {
-        "BTC": "bitcoin", "ETH": "ethereum", "XRP": "ripple",
-        "SOL": "solana", "LINK": "chainlink", "BCH": "bitcoin-cash",
-        "UNI": "uniswap", "LEO": "leo-token", "WBT": "whitebit",
-        "WLFI": "world-liberty-financial"
-    }
-    DEFAULT_CURRENCY = "aud"
-    API_RETRY_COUNT = 3
-    API_TIMEOUT = 10
-    API_RATE_LIMIT_BACKOFF_BASE = 2
+from constants import (
+    COINGECKO_BASE_URL, COIN_IDS, DEFAULT_CURRENCY,
+    API_RETRY_COUNT, API_TIMEOUT, API_RATE_LIMIT_BACKOFF_BASE
+)
 
 
 class TransactionTracker:
@@ -231,6 +218,8 @@ class TransactionTracker:
         accounting_method: AccountingMethod
     ):
         """Process a sell transaction by matching with cost basis lots"""
+
+
         remaining_to_sell = sell_amount
         sale_value = sell_amount * sell_price
         
@@ -245,6 +234,11 @@ class TransactionTracker:
             lots = self._get_open_lots_average_cost(symbol)
         else:
             lots = self._get_open_lots_fifo(symbol)  # Default to FIFO
+        
+        # Validate sufficient holdings
+        total_available = sum(lot['amount'] for lot in lots)
+        if sell_amount > total_available:
+            raise ValueError(f"Insufficient funds for sell transaction: Attempting to sell {sell_amount} {symbol} but only {total_available} available in cost basis lots.")
         
         # Match sell amount with lots
         for lot in lots:

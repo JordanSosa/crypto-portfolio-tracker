@@ -10,6 +10,8 @@ from typing import Dict, List, Optional
 import os
 import sys
 import json
+import sqlite3
+import requests
 
 # Import portfolio modules
 try:
@@ -62,17 +64,90 @@ CORS(app)  # Enable CORS for development
 
 import pickle
 
-# Global cache for portfolio data with timestamp
-_portfolio_cache = None
-_analyses_cache = None
-_market_data_cache = None
-_cache_timestamp = None
-CACHE_DURATION_SECONDS = 14400  # Cache for 4 hours
-CACHE_FILE = "portfolio_cache.pkl"
+import threading
 
+# Thread-safe cache implementation
+class PortfolioCache:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.portfolio = None
+        self.analyses = None
+        self.market_data = None
+        self.timestamp = None
+        self.file_path = "portfolio_cache.pkl"
+        self.duration = 14400  # 4 hours
+        self.is_updating = False
 
-def asset_to_dict(asset: Asset) -> Dict:
-    """Convert Asset object to dictionary"""
+    def get(self):
+        with self._lock:
+            # Check memory cache
+            if self.portfolio and self.timestamp:
+                age = (datetime.now() - self.timestamp).total_seconds()
+                if age < self.duration:
+                    return self.portfolio, self.analyses, self.market_data
+            
+            # Check disk cache
+            try:
+                if os.path.exists(self.file_path):
+                    mod_time = datetime.fromtimestamp(os.path.getmtime(self.file_path))
+                    if (datetime.now() - mod_time).total_seconds() < self.duration:
+                        print("Loading portfolio data from disk cache...")
+                        with open(self.file_path, 'rb') as f:
+                            data = pickle.load(f)
+                            self.portfolio = data.get('portfolio')
+                            self.analyses = data.get('analyses')
+                            self.market_data = data.get('market_data')
+                            self.timestamp = data.get('timestamp')
+                            return self.portfolio, self.analyses, self.market_data
+            except Exception as e:
+                print(f"Error loading cache from disk: {e}")
+            
+            return None, None, None
+
+    def update(self, portfolio, analyses, market_data):
+        with self._lock:
+            self.portfolio = portfolio
+            self.analyses = analyses
+            self.market_data = market_data
+            self.timestamp = datetime.now()
+            
+            try:
+                with open(self.file_path, 'wb') as f:
+                    pickle.dump({
+                        'portfolio': self.portfolio,
+                        'analyses': self.analyses,
+                        'market_data': self.market_data,
+                        'timestamp': self.timestamp
+                    }, f)
+                print(f"Saved portfolio data to cache file: {self.file_path}")
+            except Exception as e:
+                print(f"Error saving cache to disk: {e}")
+                
+    def set_updating(self, status: bool):
+        with self._lock:
+            self.is_updating = status
+            
+    def get_updating_status(self):
+        with self._lock:
+            return self.is_updating
+
+    def clear(self):
+        with self._lock:
+            self.portfolio = None
+            self.analyses = None
+            self.market_data = None
+            self.timestamp = None
+            try:
+                if os.path.exists(self.file_path):
+                    os.remove(self.file_path)
+                    print("Disk cache cleared")
+            except Exception as e:
+                print(f"Error clearing disk cache: {e}")
+
+# Global cache instance
+cache_manager = PortfolioCache()
+
+def asset_to_dict(asset):
     return {
         'symbol': asset.symbol,
         'name': asset.name,
@@ -82,10 +157,8 @@ def asset_to_dict(asset: Asset) -> Dict:
         'value': asset.value
     }
 
-
-def analysis_to_dict(analysis: MarketAnalysis) -> Dict:
-    """Convert MarketAnalysis object to dictionary"""
-    result = {
+def analysis_to_dict(analysis):
+    return {
         'symbol': analysis.symbol,
         'price_change_24h': analysis.price_change_24h,
         'price_change_7d': analysis.price_change_7d,
@@ -97,105 +170,70 @@ def analysis_to_dict(analysis: MarketAnalysis) -> Dict:
         'recommendation': analysis.recommendation.value if hasattr(analysis.recommendation, 'value') else str(analysis.recommendation),
         'reason': analysis.reason,
         'suggested_action': analysis.suggested_action,
-        'dca_multiplier': analysis.dca_multiplier,
-        'dca_priority': analysis.dca_priority
+        'dca_multiplier': getattr(analysis, 'dca_multiplier', 1.0),
+        'dca_priority': getattr(analysis, 'dca_priority', 0),
     }
-    
-    # Add technical indicators if available
-    if analysis.technical_indicators:
-        ti = analysis.technical_indicators
-        result['technical_indicators'] = {
-            'rsi': ti.rsi,
-            'sma_50': ti.sma_50,
-            'sma_200': ti.sma_200,
-            'ema_12': ti.ema_12,
-            'ema_26': ti.ema_26,
-            'macd': ti.macd,
-            'bollinger_bands': ti.bollinger_bands,
-            'price_vs_ma_position': ti.price_vs_ma_position,
-            'price_vs_bands_position': ti.price_vs_bands_position
-        }
-    else:
-        result['technical_indicators'] = None
-    
-    return result
+
+
+def start_background_update():
+    """Start portfolio data update in background thread"""
+    if cache_manager.get_updating_status():
+        print("Update already in progress...")
+        return
+        
+    print("Starting background update...")
+    cache_manager.set_updating(True)
+        
+    def _update_task():
+        try:
+            # Try to load from wallet, but disable prompts for API use
+            portfolio, market_data = load_portfolio_from_wallet(prompt_for_btc=False)
+            
+            if portfolio:
+                # Create evaluator and run analysis
+                evaluator = PortfolioEvaluator(portfolio)
+                analyses = evaluator.evaluate_portfolio(market_data=market_data)
+                
+                # Store market data in evaluator for rebalancing
+                evaluator.market_data = market_data or evaluator.market_data
+                
+                # Update cache
+                cache_manager.update(portfolio, analyses, evaluator.market_data)
+                print("Background update complete.")
+            else:
+                print("Background update failed: No portfolio loaded.")
+                
+        except Exception as e:
+            print(f"Error in background update: {e}")
+        finally:
+            cache_manager.set_updating(False)
+            
+    thread = threading.Thread(target=_update_task)
+    thread.daemon = True
+    thread.start()
 
 
 def load_portfolio_data(force_refresh: bool = False):
-    """Load portfolio data and cache it"""
-    global _portfolio_cache, _analyses_cache, _market_data_cache, _cache_timestamp
+    """Load portfolio data (non-blocking if possible)"""
     
-    # Check if we have valid memory cache
-    if not force_refresh and _portfolio_cache is not None and _cache_timestamp is not None:
-        cache_age = (datetime.now() - _cache_timestamp).total_seconds()
-        if cache_age < CACHE_DURATION_SECONDS:
-            return _portfolio_cache, _analyses_cache, _market_data_cache
-
-    # Check for file-based cache if memory cache is empty or expired
-    if not force_refresh:
-        try:
-            if os.path.exists(CACHE_FILE):
-                # Check file modification time
-                file_mod_time = datetime.fromtimestamp(os.path.getmtime(CACHE_FILE))
-                if (datetime.now() - file_mod_time).total_seconds() < CACHE_DURATION_SECONDS:
-                    print("Loading portfolio data from disk cache...")
-                    with open(CACHE_FILE, 'rb') as f:
-                        cache_data = pickle.load(f)
-                        _portfolio_cache = cache_data.get('portfolio')
-                        _analyses_cache = cache_data.get('analyses')
-                        _market_data_cache = cache_data.get('market_data')
-                        _cache_timestamp = cache_data.get('timestamp')
-                        return _portfolio_cache, _analyses_cache, _market_data_cache
-        except Exception as e:
-            print(f"Error loading cache from disk: {e}")
-            # Continue to fetch fresh data
+    # Try to get existing cache first
+    p, a, m = cache_manager.get()
     
-    if not EVALUATOR_AVAILABLE:
-        return None, None, None
-    
-    try:
-        print("Fetching fresh portfolio data from APIs...")
-        # Try to load from wallet, but disable prompts for API use
-        # It will use btc_balance from config if available
-        portfolio, market_data = load_portfolio_from_wallet(prompt_for_btc=False)
+    # If we have valid cache and not forcing refresh, return it
+    if p and not force_refresh:
+        return p, a, m
         
-        # If wallet loading fails and no portfolio is returned, stop here
-        if portfolio is None:
-            return None, None, None
-        
-        # Create evaluator and run analysis
-        evaluator = PortfolioEvaluator(portfolio)
-        analyses = evaluator.evaluate_portfolio(market_data=market_data)
-        
-        # Store market data in evaluator for rebalancing
-        evaluator.market_data = market_data or evaluator.market_data
-        
-        # Cache the results with timestamp
-        _portfolio_cache = portfolio
-        _analyses_cache = analyses
-        _market_data_cache = evaluator.market_data
-        _cache_timestamp = datetime.now()
-
-        # Save to disk cache
-        try:
-            with open(CACHE_FILE, 'wb') as f:
-                pickle.dump({
-                    'portfolio': _portfolio_cache,
-                    'analyses': _analyses_cache,
-                    'market_data': _market_data_cache,
-                    'timestamp': _cache_timestamp
-                }, f)
-            print(f"Saved portfolio data to cache file: {CACHE_FILE}")
-        except Exception as e:
-            print(f"Error saving cache to disk: {e}")
-        
-        return portfolio, analyses, evaluator.market_data
-        
-    except Exception as e:
-        print(f"Error loading portfolio data: {e}", file=sys.stderr)
-        import traceback
-        traceback.print_exc()
-        return None, None, None
+    # If forced refresh or no cache, trigger background update
+    if force_refresh or not p:
+        if not cache_manager.get_updating_status():
+            print("Triggering background update...")
+            start_background_update()
+        else:
+            print("Update already running, waiting for completion...")
+            
+    # Return what we have (even if None/Stale)
+    # The frontend will handle the "Loading" or "Updating" state
+    return p, a, m
 
 
 def get_ai_summary(portfolio, analyses):
@@ -403,16 +441,7 @@ def index():
 @app.route('/refresh')
 def refresh_data():
     """Force refresh of data"""
-    global _portfolio_cache
-    _portfolio_cache = None
-    
-    # Clear disk cache
-    try:
-        if os.path.exists(CACHE_FILE):
-            os.remove(CACHE_FILE)
-            print("Disk cache cleared")
-    except Exception as e:
-        print(f"Error clearing disk cache: {e}")
+    cache_manager.clear()
         
     return '<script>window.location.href="/";</script>'  # Redirect to home
 
@@ -526,12 +555,27 @@ def pnl():
         return render_template('pnl.html', error=str(e), active_page='pnl')
 
 
+@app.route('/api/status')
+def get_status():
+    """Get system status (is_updating)"""
+    return jsonify({
+        'is_updating': cache_manager.get_updating_status(),
+        'last_updated': cache_manager.timestamp.strftime("%Y-%m-%d %H:%M:%S") if cache_manager.timestamp else None
+    })
+
+
 @app.route('/api/portfolio/current')
 def get_current_portfolio():
     """Get current portfolio state"""
     portfolio, analyses, market_data = load_portfolio_data()
     
     if portfolio is None:
+        if cache_manager.get_updating_status():
+             return jsonify({
+                 'status': 'loading', 
+                 'message': 'Portfolio data is updating in the background. Please retry shortly.',
+                 'is_updating': True
+             }), 202
         return jsonify({'error': 'Could not load portfolio data'}), 500
     
     total_value = sum(asset.value for asset in portfolio.values())
@@ -662,16 +706,7 @@ def sync_transactions():
     
     try:
         # Clear cache to ensure fresh data after import
-        global _portfolio_cache, _analyses_cache, _market_data_cache, _cache_timestamp
-        _portfolio_cache = None
-        _analyses_cache = None
-        _market_data_cache = None
-        _cache_timestamp = None
-        if os.path.exists(CACHE_FILE):
-            try:
-                os.remove(CACHE_FILE)
-            except:
-                pass
+        cache_manager.clear()
 
         # Run import
         stats = import_from_wallet_config(limit_per_address=50) # Limit to 50 for speed

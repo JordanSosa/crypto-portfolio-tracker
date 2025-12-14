@@ -8,6 +8,7 @@ import json
 import os
 import time
 import sys
+import sqlite3
 import argparse
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional
@@ -32,66 +33,30 @@ try:
 except ImportError:
     REBALANCER_AVAILABLE = False
 
-try:
-    from constants import (
-        COINGECKO_BASE_URL,
-        COIN_IDS,
-        COIN_NAMES,
-        API_RETRY_COUNT,
-        API_TIMEOUT,
-        API_RATE_LIMIT_BACKOFF_BASE,
-        DEFAULT_CURRENCY,
-        OVER_ALLOCATION_THRESHOLD,
-        STRONG_MOMENTUM_THRESHOLD,
-        BEARISH_MOMENTUM_THRESHOLD,
-        MODERATE_BEARISH_THRESHOLD,
-        HIGH_VOLATILITY_THRESHOLD,
-        STRONG_PRICE_DROP_THRESHOLD,
-        RSI_OVERSOLD,
-        RSI_OVERBOUGHT,
-        RSI_EXTREME_OVERSOLD,
-        RSI_EXTREME_OVERBOUGHT,
-        HISTORICAL_PRICE_FETCH_DELAY,
-        RATE_LIMIT_SAFE_THRESHOLD,
-        MAX_HISTORICAL_FETCHES_PER_RUN
-    )
-except ImportError:
-    # Fallback if constants module not available
-    RSI_OVERSOLD = 30.0
-    RSI_OVERBOUGHT = 70.0
-    RSI_EXTREME_OVERSOLD = 20.0
-    RSI_EXTREME_OVERBOUGHT = 80.0
-except ImportError:
-    # Fallback if constants module not available
-    COINGECKO_BASE_URL = "https://api.coingecko.com/api/v3"
-    COIN_IDS = {
-        "BTC": "bitcoin", "ETH": "ethereum", "XRP": "ripple",
-        "SOL": "solana", "LINK": "chainlink", "BCH": "bitcoin-cash",
-        "UNI": "uniswap", "LEO": "leo-token", "WBT": "whitebit",
-        "WLFI": "world-liberty-financial"
-    }
-    COIN_NAMES = {
-        "BTC": "Bitcoin", "ETH": "Ethereum", "XRP": "Ripple",
-        "SOL": "Solana", "LINK": "Chainlink", "UNI": "Uniswap",
-        "BCH": "Bitcoin Cash", "LEO": "LEO Token", "WBT": "WhiteBIT Coin"
-    }
-    API_RETRY_COUNT = 3
-    API_TIMEOUT = 10
-    API_RATE_LIMIT_BACKOFF_BASE = 2
-    DEFAULT_CURRENCY = "aud"
-    OVER_ALLOCATION_THRESHOLD = 45.0
-    STRONG_MOMENTUM_THRESHOLD = 2.0
-    BEARISH_MOMENTUM_THRESHOLD = -2.0
-    MODERATE_BEARISH_THRESHOLD = -1.5
-    HIGH_VOLATILITY_THRESHOLD = 20.0
-    STRONG_PRICE_DROP_THRESHOLD = -5.0
-    RSI_OVERSOLD = 30.0
-    RSI_OVERBOUGHT = 70.0
-    RSI_EXTREME_OVERSOLD = 20.0
-    RSI_EXTREME_OVERBOUGHT = 80.0
-    HISTORICAL_PRICE_FETCH_DELAY = 7
-    RATE_LIMIT_SAFE_THRESHOLD = 2
-    MAX_HISTORICAL_FETCHES_PER_RUN = 3
+from constants import (
+    COINGECKO_BASE_URL,
+    COIN_IDS,
+    COIN_NAMES,
+    API_RETRY_COUNT,
+    API_TIMEOUT,
+    API_RATE_LIMIT_BACKOFF_BASE,
+    DEFAULT_CURRENCY,
+    OVER_ALLOCATION_THRESHOLD,
+    STRONG_MOMENTUM_THRESHOLD,
+    BEARISH_MOMENTUM_THRESHOLD,
+    MODERATE_BEARISH_THRESHOLD,
+    HIGH_VOLATILITY_THRESHOLD,
+    STRONG_PRICE_DROP_THRESHOLD,
+    RSI_OVERSOLD,
+    RSI_OVERBOUGHT,
+    RSI_EXTREME_OVERSOLD,
+    RSI_EXTREME_OVERBOUGHT,
+    HISTORICAL_PRICE_FETCH_DELAY,
+    RATE_LIMIT_SAFE_THRESHOLD,
+    MAX_HISTORICAL_FETCHES_PER_RUN,
+    DCA_INCREASE_MULTIPLIER,
+    DCA_DECREASE_MULTIPLIER
+)
 
 
 class Recommendation(Enum):
@@ -430,7 +395,7 @@ class PortfolioEvaluator:
                     # If data is more than 2 days old, fetch fresh data
                     if days_old > 2 or len(historical_prices) < 50:
                         historical_prices = None
-            except Exception as e:
+            except sqlite3.Error:
                 # If database fails, fall back to API
                 historical_prices = None
         
@@ -525,221 +490,159 @@ class PortfolioEvaluator:
         Returns:
             Tuple of (recommendation, reason, action, dca_multiplier, priority)
         """
-        reasons = []
-        dca_multiplier = 1.0
-        priority = 0
-        base_dca_amount = 100.0  # Base unit for recommendations
-        
-        # Use technical indicators if available
-        rsi = technical_indicators.rsi if technical_indicators else None
-        sma_200 = technical_indicators.sma_200 if technical_indicators else None
-        price_vs_ma = technical_indicators.price_vs_ma_position if technical_indicators else None
+        # 1. Check for immediate stop/reduce conditions (Risk Management)
+        risk_recommendation = self._check_risk_factors(asset, volatility, trend, risk_adjusted_momentum, technical_indicators)
+        if risk_recommendation:
+            return risk_recommendation
+            
+        # 2. Check for strong buy signals (DCA Increase)
+        buy_recommendation = self._check_buy_signals(asset, change_24h, change_30d, risk_adjusted_momentum, technical_indicators)
+        if buy_recommendation:
+            return buy_recommendation
+            
+        # 3. Default behavior based on allocation
+        return self._check_allocation_strategy(asset, trend)
 
-        # Factor 0: CRITICAL ALLOCATION CHECK (Overrides everything else)
-        # If asset is significantly over-allocated, we should generally NOT buy more 
-        # unless it's a catastrophic crash (prices very low) to average down.
+    def _check_risk_factors(self, asset, volatility, trend, risk_adjusted_momentum, technical_indicators) -> Optional[Tuple]:
+        """Check for conditions that suggest stopping or reducing DCA"""
+        strict_cap = 45.0 if asset.symbol in ['BTC', 'ETH'] else 20.0
         
-        # Determine strict allocation limit based on asset type (roughly)
-        # In a real app this would be config-driven.
-        # Assuming BTC/ETH can go up to 40%, others 15%
-        is_major = asset.symbol in ['BTC', 'ETH']
-        strict_cap = 45.0 if is_major else 20.0
-        
+        # Stop DCA if over-allocated significantly
         if asset.allocation_percent > strict_cap:
-            reasons.append(f"Allocation ({asset.allocation_percent:.1f}%) exceeds strict cap ({strict_cap}%)")
-            
-            # Allow buying ONLY if RSI is extremely low (crash protection/averaging down)
-            if rsi is not None and rsi < RSI_EXTREME_OVERSOLD:
-                dca_multiplier = 0.5 # Buy small amount to average down
-                priority = 8 # High priority to catch the crash
-                return (
-                    Recommendation.DCA_INCREASE,
-                    f"Asset is strictly over-allocated ({asset.allocation_percent:.1f}%) but RSI is extremely oversold ({rsi:.1f}) - buying small amount to average down Cost Basis.",
-                    f"Buy ${base_dca_amount * 0.5:.2f} (0.5x - Averaging Down)",
-                    0.5,
-                    priority
-                )
-            else:
-                # Force Hold or Sell
-                if asset.allocation_percent > strict_cap * 1.2: # Way over cap
-                     sell_amount = asset.value * 0.05
-                     return (
-                        Recommendation.DCA_OUT_START,
-                        f"Critical over-allocation ({asset.allocation_percent:.1f}%). Portfolio balance risk is high.",
-                        f"Sell ${sell_amount:.2f} (Risk Reduction)",
-                        0.0,
-                        9
-                    )
-                else:
-                    return (
-                        Recommendation.DCA_PAUSE,
-                        f"Allocation ({asset.allocation_percent:.1f}%) is too high for further accumulation. Hold current position.",
-                        "Pause DCA (Allocation Limit)",
-                        0.0,
-                        5
-                    )
-        
-        # Factor 1: RSI-based DCA adjustments
-        if rsi is not None:
-            if rsi < RSI_EXTREME_OVERSOLD:  # Very oversold
-                dca_multiplier = 2.0
-                priority = 10
-                reasons.append(f"Extremely oversold (RSI: {rsi:.1f})")
-                amount = base_dca_amount * dca_multiplier
-                return (
-                    Recommendation.DCA_INCREASE,
-                    f"Extremely oversold conditions (RSI: {rsi:.1f}) - excellent buying opportunity",
-                    f"Buy ${amount:.2f} (2.0x standard)",
-                    dca_multiplier,
-                    priority
-                )
-            elif rsi < RSI_OVERSOLD:  # Oversold
-                dca_multiplier = 1.5
-                priority = 7
-                reasons.append(f"Oversold (RSI: {rsi:.1f})")
-                amount = base_dca_amount * dca_multiplier
-                return (
-                    Recommendation.DCA_INCREASE,
-                    f"Oversold conditions (RSI: {rsi:.1f}) - good buying opportunity",
-                    f"Buy ${amount:.2f} (1.5x standard)",
-                    dca_multiplier,
-                    priority
-                )
-            elif rsi > RSI_EXTREME_OVERBOUGHT:  # Very overbought
-                reasons.append(f"Extremely overbought (RSI: {rsi:.1f})")
-                # Check if we should DCA out for profit-taking
-                # If allocation is above target and extremely overbought, suggest DCA out
-                if asset.allocation_percent > 10:  # Has meaningful position
-                    # Check if we have target allocation info
-                    try:
-                        from portfolio_rebalancer import PortfolioRebalancer
-                        rebalancer = PortfolioRebalancer()
-                        target_allocation = rebalancer.target_allocations.get(asset.symbol, 0)
-                        if asset.allocation_percent > target_allocation:
-                            # Suggest selling a portion
-                            sell_amount = asset.value * 0.1  # Sell 10% of position
-                            return (
-                                Recommendation.DCA_OUT_START,
-                                f"Extremely overbought (RSI: {rsi:.1f}) and above target allocation - profit-taking opportunity",
-                                f"Sell ${sell_amount:.2f} (Profit taking)",
-                                0.0,
-                                8
-                            )
-                    except:
-                        pass
-                # Otherwise just pause
-                return (
-                    Recommendation.DCA_PAUSE,
-                    f"Extremely overbought (RSI: {rsi:.1f}) - consider pausing DCA",
-                    "Pause DCA ($0.00)",
-                    0.0,
-                    5
-                )
-            elif rsi > RSI_OVERBOUGHT:  # Overbought
-                dca_multiplier = 0.5
-                priority = 3
-                reasons.append(f"Overbought (RSI: {rsi:.1f})")
-                amount = base_dca_amount * dca_multiplier
-                return (
-                    Recommendation.DCA_DECREASE,
-                    f"Overbought conditions (RSI: {rsi:.1f}) - reduce DCA amount",
-                    f"Buy ${amount:.2f} (0.5x standard)",
-                    dca_multiplier,
-                    priority
-                )
-        
-        # Factor 2: Moving Average context
-        if sma_200 is not None and asset.current_price > 0:
-            price_above_200ma = asset.current_price > sma_200
-            price_distance_from_200ma = abs((asset.current_price - sma_200) / sma_200) * 100
-            
-            if not price_above_200ma and price_distance_from_200ma > 10:
-                # Price significantly below 200-day MA - accumulation zone
-                dca_multiplier = max(dca_multiplier, 1.3)
-                priority = max(priority, 6)
-                reasons.append(f"Price {price_distance_from_200ma:.1f}% below 200-day MA")
-            elif price_above_200ma and price_distance_from_200ma > 20:
-                # Price far above 200-day MA - be cautious or take profits
-                if asset.allocation_percent > 10 and change_30d > 20:
-                     # Suggest selling a portion
-                     sell_amount = asset.value * 0.05  # Sell 5% of position
-                     return (
-                         Recommendation.DCA_OUT_START,
-                         f"Price {price_distance_from_200ma:.1f}% above 200-day MA with strong gains - profit-taking opportunity",
-                         f"Sell ${sell_amount:.2f} (Lock gains)",
-                         0.0,
-                         7
-                     )
-                
-                dca_multiplier = min(dca_multiplier, 0.7)
-                priority = max(priority, 4)
-                reasons.append(f"Price {price_distance_from_200ma:.1f}% above 200-day MA")
-        
-        # Factor 3: Allocation-based adjustments
-        if asset.allocation_percent < 5 and trend != "bearish":
-            priority = max(priority, 8)
-            reasons.append("Under-allocated position")
-            dca_multiplier = max(dca_multiplier, 1.2)
-        elif asset.allocation_percent > OVER_ALLOCATION_THRESHOLD:
-            if trend == "bearish" or risk_adjusted_momentum < MODERATE_BEARISH_THRESHOLD:
-                sell_amount = asset.value * 0.1
-                return (
+             # Stop DCA if over-allocated significantly
+            if asset.allocation_percent > strict_cap * 1.2: # Way over cap
+                 sell_amount = asset.value * 0.05
+                 return (
                     Recommendation.DCA_OUT_START,
-                    f"Over-allocated ({asset.allocation_percent:.1f}%) with bearish signals",
-                    f"Sell ${sell_amount:.2f} (Reduce Risk)",
+                    f"Critical over-allocation ({asset.allocation_percent:.1f}%). Portfolio balance risk is high.",
+                    f"Sell ${sell_amount:.2f} (Risk Reduction)",
                     0.0,
                     9
                 )
-            else:
-                dca_multiplier = 0.0  # Pause buying
-                priority = 2
-                reasons.append(f"Over-allocated ({asset.allocation_percent:.1f}%)")
-        
-        # Factor 4: Strong bearish momentum - pause or reduce
-        if risk_adjusted_momentum < BEARISH_MOMENTUM_THRESHOLD and change_24h < STRONG_PRICE_DROP_THRESHOLD:
-            if asset.allocation_percent > 20:
+            
+            # Allow average down if extreme crash
+            if technical_indicators and technical_indicators.rsi is not None and technical_indicators.rsi < RSI_EXTREME_OVERSOLD:
+                return (
+                    Recommendation.DCA_INCREASE,
+                    f"Asset is strictly over-allocated ({asset.allocation_percent:.1f}%) but RSI is extremely oversold - averaging down.",
+                    "Buy (0.5x - Averaging Down)",
+                    0.5,
+                    8
+                )
+            
+            return (
+                Recommendation.DCA_PAUSE,
+                f"Allocation ({asset.allocation_percent:.1f}%) exceeds strict cap ({strict_cap}%)",
+                "Pause DCA to prevent further over-exposure",
+                0.0,
+                0
+            )
+            
+        # Stop DCA if in extreme overbought territory
+        if technical_indicators and technical_indicators.rsi is not None:
+             if technical_indicators.rsi > RSI_EXTREME_OVERBOUGHT:
+                if asset.allocation_percent > 10:
+                    sell_amount = asset.value * 0.1
+                    return (
+                        Recommendation.DCA_OUT_START,
+                        f"Extremely overbought (RSI: {technical_indicators.rsi:.1f}) - profit taking opportunity",
+                        f"Sell ${sell_amount:.2f}",
+                        0.0,
+                        8
+                    )
                 return (
                     Recommendation.DCA_PAUSE,
-                    "Strong bearish momentum detected - pause DCA",
-                    "Pause DCA ($0.00)",
+                    f"Extreme overbought conditions (RSI: {technical_indicators.rsi:.1f})",
+                    "Pause DCA and wait for pullback",
                     0.0,
-                    6
+                    0
                 )
-            else:
-                dca_multiplier = 0.5
-                priority = 4
-                reasons.append("Bearish momentum - reduce DCA")
         
-        # Factor 5: Strong bullish momentum with low allocation
+        # Reduce DCA if allocation is getting high
+        if asset.allocation_percent > strict_cap * 0.8:
+             return (
+                Recommendation.DCA_DECREASE,
+                f"Approaching maximum allocation ({asset.allocation_percent:.1f}%)",
+                "Reduce DCA amount by 50%",
+                DCA_DECREASE_MULTIPLIER,
+                3
+            )
+
+        # Reduce DCA in high volatility + bearish trend
+        if volatility > HIGH_VOLATILITY_THRESHOLD and trend == "bearish":
+             return (
+                Recommendation.DCA_DECREASE,
+                f"High volatility ({volatility:.1f}%) in bearish trend",
+                "Reduce DCA to manage risk",
+                DCA_DECREASE_MULTIPLIER,
+                4
+            )
+            
+        return None
+
+    def _check_buy_signals(self, asset, change_24h, change_30d, risk_adjusted_momentum, technical_indicators) -> Optional[Tuple]:
+        """Check for opportunities to increase DCA"""
+        
+        # Increase DCA on strong dips (buy the dip)
+        if change_24h < STRONG_PRICE_DROP_THRESHOLD and risk_adjusted_momentum > -1.0:
+            multiplier = DCA_INCREASE_MULTIPLIER
+            priority = 8
+            reason = ""
+            
+            # Supercharge if RSI is oversold
+            if technical_indicators and technical_indicators.rsi:
+                if technical_indicators.rsi < RSI_EXTREME_OVERSOLD:
+                    multiplier = 2.0
+                    priority = 10
+                    reason = f"Extreme oversold (RSI: {technical_indicators.rsi:.1f}) + Dip"
+                elif technical_indicators.rsi < RSI_OVERSOLD:
+                    multiplier = 1.5
+                    priority = 9
+                    reason = f"Oversold (RSI: {technical_indicators.rsi:.1f}) + Dip"
+            
+            if not reason:
+                 reason = f"Buying the dip ({change_24h:.1f}%)"
+                 
+            return (
+                Recommendation.DCA_INCREASE,
+                reason,
+                f"Increase DCA by {(multiplier-1)*100:.0f}%",
+                multiplier,
+                priority
+            )
+            
+        # Increase DCA on momentum breakout if under-allocated
         if risk_adjusted_momentum > STRONG_MOMENTUM_THRESHOLD and asset.allocation_percent < 10:
-            dca_multiplier = max(dca_multiplier, 1.3)
-            priority = max(priority, 7)
-            reasons.append("Strong bullish momentum with low allocation")
-        
-        # Factor 6: High volatility - be cautious
-        if volatility > HIGH_VOLATILITY_THRESHOLD:
-            dca_multiplier = min(dca_multiplier, 0.8)
-            priority = max(priority, 3)
-            reasons.append(f"High volatility ({volatility:.1f}%)")
-        
-        # Return final recommendation
-        amount = base_dca_amount * dca_multiplier
-        
-        if dca_multiplier == 0.0:
-            recommendation = Recommendation.DCA_PAUSE
-            action = "Pause DCA ($0.00)"
-        elif dca_multiplier >= 1.3:
-            recommendation = Recommendation.DCA_INCREASE
-            action = f"Buy ${amount:.2f} ({dca_multiplier:.1f}x)"
-        elif dca_multiplier <= 0.7:
-            recommendation = Recommendation.DCA_DECREASE
-            action = f"Buy ${amount:.2f} ({dca_multiplier:.1f}x)"
+             return (
+                Recommendation.DCA_INCREASE,
+                "Strong momentum breakout",
+                "Increase DCA to build position",
+                DCA_INCREASE_MULTIPLIER,
+                7
+            )
+            
+        return None
+
+    def _check_allocation_strategy(self, asset, trend) -> Tuple:
+        """Default DCA strategy based on allocation status"""
+        if asset.allocation_percent < 5:
+            # Boost priority for small bags if trend is okay
+            priority = 5 if trend != 'bearish' else 3
+            return (
+                Recommendation.DCA_STANDARD,
+                "Building initial position",
+                "Continue standard DCA",
+                1.0,
+                priority
+            )
         else:
-            recommendation = Recommendation.DCA_STANDARD
-            action = f"Buy ${amount:.2f} (Standard)"
-        
-        reason_text = "; ".join(reasons) if reasons else "Normal market conditions"
-        return (recommendation, reason_text, action, dca_multiplier, priority)
+            return (
+                Recommendation.DCA_STANDARD,
+                "Maintenance accumulation",
+                "Continue standard DCA",
+                1.0,
+                4
+            )
 
     def generate_executive_summary(self, analyses: List[MarketAnalysis]) -> Dict[str, str]:
         """Generate a high-level executive summary of the portfolio actions."""
@@ -1115,7 +1018,7 @@ class PortfolioEvaluator:
                                 print(f"  Stopping further fetches to avoid rate limits.")
                                 print(f"  Remaining symbols will be fetched on next run.")
                                 break
-                    except Exception as e:
+                    except requests.exceptions.RequestException as e:
                         error_msg = str(e).lower()
                         print(f"  ✗ {symbol}: Error - {e}")
                         # Check if it's a rate limit error
